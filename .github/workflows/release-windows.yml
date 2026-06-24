@@ -1,0 +1,58 @@
+name: Build Windows release
+
+# Bygger Windows-.exe'en og udgiver den som GitHub Release. Denne release er
+# både første-leverancen OG OTA-kilden som updater.check_for_update peger på.
+# Trigges ved at skubbe et version-tag, fx:  git tag v1.0.1 && git push --tags
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # nødvendig for at oprette en Release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Fetch ffmpeg/ffprobe
+        shell: pwsh
+        run: |
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Invoke-WebRequest $url -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_tmp
+          $bin = Get-ChildItem ffmpeg_tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          Copy-Item $bin.FullName .
+          Copy-Item (Join-Path $bin.Directory.FullName ffprobe.exe) .
+
+      - name: Build
+        run: pyinstaller modevaerktoj.spec
+
+      - name: Zip + checksum
+        shell: pwsh
+        run: |
+          # '/*' så zip'en indeholder mappens INDHOLD direkte (exe i roden),
+          # ikke en nested mappe — apply_and_restart udpakker fladt.
+          Compress-Archive -Path "dist/Mødeværktøj/*" -DestinationPath "Modevaerktoj-${{ github.ref_name }}.zip"
+          $h = (Get-FileHash "Modevaerktoj-${{ github.ref_name }}.zip" -Algorithm SHA256).Hash.ToLower()
+          # UTF-8 uden BOM — ellers ville updater._fetch_text få BOM med i hashet.
+          [System.IO.File]::WriteAllText(
+            (Join-Path $PWD "Modevaerktoj-${{ github.ref_name }}.zip.sha256"), $h)
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Modevaerktoj-${{ github.ref_name }}.zip
+            Modevaerktoj-${{ github.ref_name }}.zip.sha256

@@ -1,0 +1,25 @@
+{
+  "personer": [
+    "Mads — driftsleder. ALDRIG 'Mats'; i tvivl: vælg Mads",
+    "Anna Holm — ejer",
+    "Bo Holm — ejer",
+    "Henrik — IT",
+    "Dorte, Erik, Frederik, Gitte, Lars — medarbejdere"
+  ],
+  "steder": [
+    "Nordmarken — eksempel-mark; IKKE samme som Nordgården",
+    "Nordgården — leverandør; IKKE samme som Nordmarken",
+    "Sydmarken — eksempel-mark",
+    "Vestgården — ekstern samarbejdsgård/leverandør",
+    "Eksempelgården — dansk grøntsagsproducent"
+  ],
+  "fagtermer": [
+    "GLOBALG.A.P., GRASP — certificeringer",
+    "Afgrøder: løg, spidskål, blomkål, broccoli, hvidkål, rødkål, ærter, asparges, frilandsjordbær, kartofler",
+    "harvning, tallerkenharvning, dybharvning — IKKE 'havning' (r'et skal med)",
+    "ramsning, radrensning, fiberdug, gyllevogn, plantemaskine, lugevogn",
+    "hektar (ha), tørstof, udbytte, sædskifte, vanding, grundvand, gødskning, såning, høst, pakning, sortering",
+    "mekanisk lugning, pesticider, sprøjtning, jordprøver",
+    "fodermester, arbejdsleder, traktor, såmaskine, mejetærsker, rensemaskine"
+  ]
+}

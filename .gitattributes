@@ -1,0 +1,2 @@
+# Windows-batch-launcheren skal bevare CRLF, ellers kan cmd.exe fejle tavst.
+*.bat text eol=crlf

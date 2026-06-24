@@ -1,0 +1,20 @@
+{
+  "driftledelse": {
+    "navn": "Driftledelsesmøde",
+    "detaljeniveau": "kortfattet",
+    "citater": false,
+    "opgaveliste": true,
+    "fokus": "Konkrete opgaver, aftaler og beslutninger for den daglige drift.",
+    "ekstra_instruktioner": "",
+    "deltagere": []
+  },
+  "ledergruppe": {
+    "navn": "Ledergruppemøde",
+    "detaljeniveau": "grundig",
+    "citater": true,
+    "opgaveliste": false,
+    "fokus": "Strategi, langsigtet retning og principielle drøftelser.",
+    "ekstra_instruktioner": "Skriv i sammenhængende prosa. Bevar nuancer og uenigheder.",
+    "deltagere": []
+  }
+}

@@ -1,0 +1,36 @@
+# Hemmeligheder
+.env
+.env.local
+
+# Bruger-state (lokale stier og indstillinger)
+state.json
+vocabulary.json
+meeting_types.json
+
+# Optagelser og transkriptioner (rigtige mødedata)
+test-output/
+tmp_resume/
+*.wav
+*.m4a
+*.mp3
+
+# Python-cache
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Worktrees
+.worktrees/
+
+# Test-output
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+
+# CoreAudio-hjælper (kompileret binær og runtime-state)
+.audio_helper
+.audio_output_state.json
