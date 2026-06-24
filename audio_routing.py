@@ -111,7 +111,11 @@ def setup_system_output() -> SetupResult:
     den simple check her erstatter alt det gamle setup-flow.
     """
     if system_audio_available():
-        return SetupResult(status="ok")
+        # system_device=0 fungerer som et "ja, optag dual-track"-flag i GUI/CLI.
+        # AudioTee tap'per systemlyd direkte uden enheds-indeks, så værdien
+        # bruges kun til not-None-tjekket i meeting_tool.py — selve tallet
+        # ignoreres (del sys_device i _record_dual_tracks).
+        return SetupResult(status="ok", system_device=0)
     return SetupResult(status="needs_manual", guidance=_AUDIOTEE_MISSING_GUIDANCE)
 
 

@@ -92,6 +92,30 @@ class TestSetupSystemOutput:
         assert r.status == "needs_manual"
         assert "audiotee" in r.guidance.lower()
 
+    def test_system_device_not_none_when_available(self, mocker):
+        """Regression: setup_system_output() skal returnere system_device != None
+        naar AudioTee er tilgaengelig, saa kaldekoden (gater paa 'if system_device
+        is not None') aktiverer dual-track-optagelse.
+
+        Bug: foer fix returnerede setup_system_output() SetupResult(status='ok')
+        uden system_device, saa system_device var None og dual-track udloestes
+        aldrig fra GUI/CLI.
+        """
+        mocker.patch("audio_routing.system_audio_available", return_value=True)
+        r = ar.setup_system_output()
+        assert r.system_device is not None, (
+            "system_device maa ikke vaere None naar AudioTee er tilgaengelig — "
+            "kaldekoden bruger 'if system_device is not None' til at gate dual-track"
+        )
+
+    def test_ensure_routing_active_system_device_not_none_when_available(self, mocker):
+        """Regression (via ensure_routing_active): system_device skal vaere ikke-None
+        naar AudioTee er tilgaengelig, saa GUI/CLI-koden aktiverer dual-track.
+        """
+        mocker.patch("audio_routing.system_audio_available", return_value=True)
+        r = ar.ensure_routing_active()
+        assert r.system_device is not None
+
 
 class TestEnsureRoutingActive:
     def test_delegates_to_setup_system_output(self, mocker):

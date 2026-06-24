@@ -35,7 +35,12 @@ class TestWritePdfFromMarkdown:
         assert cmd[0] == "pandoc"
         assert str(md_file) in cmd
         assert str(pdf_path) in cmd
-        assert "--pdf-engine=weasyprint" in cmd
+        # Engine kan være "weasyprint" (fallback) eller en absolut sti til
+        # weasyprint (når _find_weasyprint lokaliserer den uden for PATH).
+        assert any(
+            c.startswith("--pdf-engine=") and c.endswith("weasyprint")
+            for c in cmd
+        )
 
     def test_pandoc_missing_returns_none(self, mock_subprocess, md_file, tmp_path):
         mock_subprocess.run.side_effect = FileNotFoundError("pandoc not found")

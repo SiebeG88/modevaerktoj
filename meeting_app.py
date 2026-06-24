@@ -937,19 +937,17 @@ class MeetingApp:
             self.device_combo.set("(ingen enheder fundet)")
             return
         labels = []
+        self._device_labels = {}  # dev_id -> label
         for dev_id, name in devices:
             label = f"[{dev_id}] {name}" if isinstance(dev_id, int) else name
             self._device_ids[label] = dev_id
+            self._device_labels[dev_id] = label
             labels.append(label)
         self.device_combo.configure(values=labels)
-        # foretræk en mikrofon-enhed; ellers første i listen
-        preferred = next(
-            (l for l in labels
-             if "macbook" in l.lower()
-             or "microphone" in l.lower()
-             or "mikrofon" in l.lower()),
-            labels[0],
-        )
+        # Vælg den bedste RIGTIGE mikrofon: udeluk virtuelle enheder
+        # (BlackHole/Teams/Zoom) og foretræk den indbyggede Mac-mikrofon.
+        preferred_id = meeting_tool.select_preferred_input_device(devices)
+        preferred = self._device_labels.get(preferred_id, labels[0])
         self.device_combo.set(preferred)
 
     def _on_system_audio_toggle(self):
@@ -991,6 +989,17 @@ class MeetingApp:
         if ids:
             return next(iter(ids.values()))
         return 1
+
+    def _selected_device_name(self):
+        """Navnet på den valgte enhed uden '[id] '-præfiks.
+
+        Bruges til at slå enheden op til et AKTUELT index lige før optagelse
+        i stedet for at genbruge et cachet (og evt. forældet) index.
+        """
+        label = self.device_var.get()
+        if label.startswith("[") and "]" in label:
+            return label.split("]", 1)[1].strip()
+        return label.strip()
 
     # ------------------------------------------------------------------
     # Handlers
@@ -1088,8 +1097,9 @@ class MeetingApp:
         self._log(f"Deltagere: {', '.join(attendees)}")
         self._log("")
 
-        # Start worker-tråd
-        device_id = self._parse_device_id()
+        # Start worker-tråd. Send enhedens NAVN, ikke et cachet index — index
+        # genoversættes lige før optagelse (avfoundation-indekser flytter sig).
+        device_name = self._selected_device_name()
         chunk_dur = DEFAULT_CHUNK_DURATION
         gen_minutes = self.minutes_var.get()
         engine = self.engine_var.get()
@@ -1101,7 +1111,7 @@ class MeetingApp:
 
         self.worker_thread = threading.Thread(
             target=self._run_recording,
-            args=(output_dir, date, name, device_id, chunk_dur, gen_minutes, attendees, engine, system_audio, meeting_type),
+            args=(output_dir, date, name, device_name, chunk_dur, gen_minutes, attendees, engine, system_audio, meeting_type),
             daemon=True,
         )
         self.worker_thread.start()
@@ -1138,9 +1148,20 @@ class MeetingApp:
     # Worker-tråd (kører i baggrunden, kommunikerer via ui_queue)
     # ------------------------------------------------------------------
 
-    def _run_recording(self, output_dir, date, name, device_id, chunk_dur, gen_minutes, attendees, engine, system_audio, meeting_type=None):
+    def _run_recording(self, output_dir, date, name, device_name, chunk_dur, gen_minutes, attendees, engine, system_audio, meeting_type=None):
         system_device = None
         previous_output = None
+        # Slå enheden op til et AKTUELT index og verificér at den giver signal,
+        # FØR optagelsen starter. Forhindrer en tavs optagelse hvis indekserne
+        # har flyttet sig (fx efter et tidligere møde) eller hvis en virtuel
+        # enhed som BlackHole er valgt ved en fejl.
+        try:
+            device_id = meeting_tool.prepare_input_device(
+                device_name, on_status=self._ui_status
+            )
+        except meeting_tool.SilentInputError as e:
+            self._ui_queue_put(("error", str(e)))
+            return
         if system_audio:
             routing = audio_routing.ensure_routing_active()
             if routing.status == "ok":

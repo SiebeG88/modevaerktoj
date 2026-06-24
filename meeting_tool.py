@@ -272,6 +272,141 @@ def _parse_dshow_devices(stderr: str) -> list:
     return devices
 
 
+# Virtuelle/loopback/konference-enheder — IKKE rigtige mikrofoner. At optage
+# fra en af disse uden noget routet ind giver en helt tavs (nul) optagelse.
+_VIRTUAL_DEVICE_KEYWORDS = (
+    "blackhole", "multi-output", "aggregate", "soundflower",
+    "loopback", "vb-cable", "vb-audio", "teams", "zoom",
+)
+
+# Navne-fragmenter der peger på en indbygget Mac-mikrofon (foretrækkes).
+_BUILTIN_MIC_KEYWORDS = ("macbook", "built-in", "indbygget", "intern")
+
+
+class SilentInputError(RuntimeError):
+    """Rejst når den valgte lydenhed ikke leverer signal (tavs optagelse)."""
+
+
+def is_virtual_input_device(name: str) -> bool:
+    """True hvis enhedsnavnet ligner en virtuel/loopback/konference-enhed
+    (BlackHole, Multi-Output, Aggregate, Teams, Zoom, …) frem for en mikrofon."""
+    low = (name or "").lower()
+    return any(kw in low for kw in _VIRTUAL_DEVICE_KEYWORDS)
+
+
+def select_preferred_input_device(devices):
+    """Vælg den bedste rigtige mikrofon fra [(id, navn), …].
+
+    Udelukker virtuelle enheder; foretrækker den indbyggede Mac-mikrofon;
+    ellers første ikke-virtuelle enhed. Returnerer enhedens id eller None.
+    """
+    real = [(dev_id, name) for dev_id, name in devices
+            if not is_virtual_input_device(name)]
+    if not real:
+        return None
+    for dev_id, name in real:
+        low = name.lower()
+        if any(kw in low for kw in _BUILTIN_MIC_KEYWORDS):
+            return dev_id
+    return real[0][0]
+
+
+def resolve_device_index(name, devices):
+    """Slå et enhedsnavn op til dets AKTUELLE id i [(id, navn), …].
+
+    avfoundation-indekser flytter sig når enheder kobles til/fra (iPhone via
+    Continuity, BlackHole, Teams/Zoom), så et navn skal genoversættes lige før
+    optagelse i stedet for at genbruge et cachet index. Matcher eksakt, derefter
+    case-insensitivt, derefter som delstreng. Returnerer id eller None.
+    """
+    if not name:
+        return None
+    for dev_id, dev_name in devices:
+        if dev_name == name:
+            return dev_id
+    low = name.lower()
+    for dev_id, dev_name in devices:
+        if dev_name.lower() == low:
+            return dev_id
+    for dev_id, dev_name in devices:
+        if low in dev_name.lower():
+            return dev_id
+    return None
+
+
+def measure_input_level_db(device_id, duration: float = 1.0):
+    """Optag ~duration sek. fra enheden og returnér max_volume i dB.
+
+    Pre-flight-tjek: digital stilhed giver ~-91 dB. Returnerer en float, eller
+    None hvis niveauet ikke kunne måles (fx ffmpeg-fejl).
+    """
+    cmd = [
+        "ffmpeg", "-hide_banner",
+        *build_ffmpeg_input(device_id),
+        "-t", str(duration),
+        "-af", "volumedetect",
+        "-f", "null", "-",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None
+    m = re.search(r"max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB", result.stderr or "")
+    if not m:
+        return None
+    return float(m.group(1))
+
+
+def input_appears_silent(device_id, threshold_db: float = -60.0,
+                         duration: float = 1.0) -> bool:
+    """True hvis enheden måler under threshold_db (reelt tavs).
+
+    Kan niveauet ikke måles (None), returneres False — en måle-fejl må ikke
+    blokere et rigtigt møde.
+    """
+    level = measure_input_level_db(device_id, duration=duration)
+    if level is None:
+        return False
+    return level <= threshold_db
+
+
+def prepare_input_device(device_name, *, check_level: bool = True,
+                         threshold_db: float = -60.0, duration: float = 1.0,
+                         on_status=None):
+    """Find det aktuelle id for den valgte mikrofon og verificér signal.
+
+    Slår device_name op til et aktuelt index (fixer forældede indekser efter fx
+    et tidligere møde). Findes navnet ikke, vælges den foretrukne mikrofon.
+    Kører et pre-flight stilheds-tjek og rejser SilentInputError hvis enheden er
+    tavs. Returnerer det brugbare device_id.
+    """
+    def _say(msg):
+        if on_status:
+            on_status(msg)
+
+    devices = list_audio_devices()
+    device_id = resolve_device_index(device_name, devices)
+    if device_id is None:
+        device_id = select_preferred_input_device(devices)
+        if device_id is None:
+            raise SilentInputError(
+                "Ingen brugbar mikrofon fundet. Tjek at en mikrofon er "
+                "tilsluttet og valgt."
+            )
+        _say(f"Enheden '{device_name}' blev ikke fundet — bruger den "
+             "foretrukne mikrofon i stedet.")
+
+    if check_level and input_appears_silent(
+        device_id, threshold_db=threshold_db, duration=duration
+    ):
+        raise SilentInputError(
+            f"Den valgte lydenhed ('{device_name}') giver intet signal — "
+            "optagelsen ville blive tavs. Tjek at den rigtige mikrofon er valgt "
+            "og ikke er muted (undgå virtuelle enheder som BlackHole)."
+        )
+    return device_id
+
+
 def record_meeting(output_path: Path, device_id: int | str = 1) -> Path:
     """
     Optager lyd fra mikrofon via ffmpeg.
@@ -428,10 +563,11 @@ def _record_dual_tracks(
                     pass
 
     if stop_event is not None:
-        def watch():
-            stop_event.wait()
-            stop_all()
-        threading.Thread(target=watch, daemon=True).start()
+        # Vent til brugeren trykker Stop, signalér SÅ processerne og dræn dem.
+        # (Tidligere kørte _drain straks med 12s-timeout via en watch-tråd, så
+        #  optagelsen afsluttede sig selv efter ~12s uanset brugeren — bug'en.)
+        stop_event.wait()
+        stop_all()
         _drain(mic_proc, "ffmpeg-mic")
         if audiotee_proc is not None:
             _drain(audiotee_proc, "AudioTee")
@@ -1352,9 +1488,16 @@ def _gemini_transcribe_single(
     # Retry på transient netværksfejl. Gemini SDK retrier på HTTP-statuskoder
     # men ikke på connection errors som "Server disconnected without sending
     # a response" — så vi pakker selv generate_content i retry-loop.
+    # Overbelastning (503/UNAVAILABLE "high demand") får et tålmodigt forløb:
+    # en demand-spike varer typisk minutter, så 2s/4s-backoff rider den ikke
+    # af. Op til 5 forsøg med 15-120s ventetid (~3,7 min i alt).
     last_exc: Exception | None = None
     response = None
-    for attempt in range(1, 4):
+    quick_backoff = (2, 4)        # netværksblip: max 3 forsøg
+    overload_backoff = (15, 30, 60, 120)  # 503-overbelastning: max 5 forsøg
+    attempt = 0
+    while True:
+        attempt += 1
         try:
             _check_stop()
             response = client.models.generate_content(
@@ -1364,6 +1507,11 @@ def _gemini_transcribe_single(
                     system_instruction=system_instruction,
                     temperature=temperature,
                     max_output_tokens=65000,
+                    # Transkription kræver ingen reasoning. Uden cap kan 2.5-pro
+                    # brænde hele output-budgettet på thinking → tom tekst +
+                    # finish_reason=MAX_TOKENS (set på sys-sporet). Cap lavt så
+                    # hele budgettet er til selve transkriptet. (Min for pro = 128.)
+                    thinking_config=types.ThinkingConfig(thinking_budget=128),
                 ),
             )
             break
@@ -1384,20 +1532,28 @@ def _gemini_transcribe_single(
                 "500",
                 "502",
             )
+            overload_markers = ("503", "unavailable", "overloaded", "high demand")
             is_transient = any(m in msg for m in transient_markers) or \
                 any(m in type(e).__name__.lower() for m in ("timeout", "connection", "remoteprotocol"))
-            if not is_transient or attempt == 3:
+            is_overload = any(m in msg for m in overload_markers)
+            schedule = overload_backoff if is_overload else quick_backoff
+            max_attempts = len(schedule) + 1
+            if not is_transient or attempt >= max_attempts:
                 raise
-            backoff = 2 ** attempt  # 2s, 4s
+            backoff = schedule[attempt - 1]
             on_status(
                 f"[{chunk_label}] Transient fejl ({type(e).__name__}: {e}); "
-                f"genforsøg {attempt+1}/3 om {backoff}s ..."
+                f"genforsøg {attempt+1}/{max_attempts} om {backoff}s ..."
             )
             last_exc = e
-            time.sleep(backoff)
+            if stop_event is not None:
+                # Afbrydeligt: vækkes straks hvis brugeren stopper.
+                stop_event.wait(backoff)
+            else:
+                time.sleep(backoff)
     if response is None:
         raise RuntimeError(
-            f"[{chunk_label}] Gemini fejlede efter 3 forsøg: {last_exc}"
+            f"[{chunk_label}] Gemini fejlede efter {attempt} forsøg: {last_exc}"
         )
     elapsed = time.time() - t0
 
@@ -1848,17 +2004,55 @@ def generate_minutes(
 # 5. Output
 # ---------------------------------------------------------------------------
 
+# Steder weasyprint typisk ligger uden at være på GUI'ens begrænsede PATH.
+_WEASYPRINT_FALLBACK_DIRS = [
+    "/opt/local/bin",
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+]
+
+
+def _find_weasyprint() -> str | None:
+    """Find weasyprint-eksekverbar — også når den ikke er på PATH.
+
+    GUI'en startes med begrænset PATH hvor pip's user-bin
+    (~/Library/Python/X.Y/bin) ikke er med, så pandoc kan ikke selv
+    finde weasyprint dér.
+    """
+    found = shutil.which("weasyprint")
+    if found:
+        return found
+    candidates = [Path(sys.executable).parent / "weasyprint"]
+    user_python = Path.home() / "Library" / "Python"
+    if user_python.is_dir():
+        candidates += sorted(user_python.glob("*/bin/weasyprint"), reverse=True)
+    candidates += [Path(d) / "weasyprint" for d in _WEASYPRINT_FALLBACK_DIRS]
+    for c in candidates:
+        if c.is_file() and os.access(c, os.X_OK):
+            return str(c)
+    return None
+
+
 def write_pdf_from_markdown(md_path: Path, pdf_path: Path) -> Path | None:
     """Render en markdown-fil til PDF via pandoc + weasyprint.
 
     Best-effort: returnerer pdf_path ved succes, None hvis pandoc mangler
     eller renderingen fejler (logger en advarsel, kaster ikke).
     """
+    engine = _find_weasyprint()
+    env = None
+    if engine:
+        env = dict(os.environ)
+        env["PATH"] = f"{Path(engine).parent}{os.pathsep}{env.get('PATH', '')}"
     try:
         subprocess.run(
-            ["pandoc", str(md_path), "-o", str(pdf_path), "--pdf-engine=weasyprint"],
+            [
+                "pandoc", str(md_path), "-o", str(pdf_path),
+                f"--pdf-engine={engine or 'weasyprint'}",
+            ],
             check=True,
             capture_output=True,
+            env=env,
         )
         return pdf_path
     except FileNotFoundError:
