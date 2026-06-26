@@ -84,9 +84,15 @@ Detaljer:
 - `_anthropic_client()` (~1909-1917)
 - `_friendly_anthropic_error()` (~1920-1923)
 - `_claude_model()` (~1936-1942)
-- `_claude_request_extra()` (~1945)
+- `_claude_request_extra()` (~1945) — sendte `MT_USER` som Vercel-gateway
+  metadata; uden gateway har den ingen funktion.
 - `CLAUDE_MINUTES_MODEL` (~1906), `CLAUDE_GATEWAY_MODEL_DEFAULT` (~1933)
 - Claude-referencer i modul-docstring (linje ~19-20) og kommentaren linje ~1823.
+
+**`MT_USER`/brugernavn fjernes:** `MT_USER` blev *kun* brugt til Claude-gateway
+metadata (`_claude_request_extra`). Når Claude fjernes, er det dødt. Derfor fjernes
+brugernavn-feltet fra første-start-dialogen og `MT_USER` fra `_save()`. Det gør
+første-start endnu enklere (kun Gemini-nøgle) — i tråd med "nemt for nye brugere".
 
 **`requirements.txt`** — fjern `anthropic>=0.40.0`.
 
@@ -104,8 +110,9 @@ Gemini-nøgle kræves.
 
 **Første-start-dialog (`_first_run_setup`, `meeting_app.py:2576-2627`):**
 - Fjern "Gateway-nøgle (Claude)"-feltet og `ANTHROPIC_BASE_URL` /
-  `ANTHROPIC_AUTH_TOKEN` fra `_save()`.
-- Behold brugernavn + **Gemini-nøgle** (maskeret). Tilføj en hjælpe-linje:
+  `ANTHROPIC_AUTH_TOKEN` fra `_save()`. Fjern også brugernavn-feltet og `MT_USER`
+  (dødt efter Claude-fjernelse).
+- Behold kun **Gemini-nøgle** (maskeret). Tilføj en hjælpe-linje:
   "Få en gratis nøgle på aistudio.google.com/apikey".
 - Tilføj en **"Fortsæt uden nøgle"**-knap (kun lokal Hviske-transkription).
 
@@ -150,7 +157,12 @@ Gemini-nøgle kræves.
 
 ### 6. Tests
 
-- Slet `tests/test_claude.py` og `tests/test_gateway.py`.
+- Slet `tests/test_claude.py`.
+- `tests/test_gateway.py` er fejlnavngivet — det rummer også ikke-Claude-tests.
+  Fjern de Claude-specifikke tests (`_anthropic_client`, `_friendly_anthropic_error`,
+  `_claude_model`, `_claude_request_extra`, Claude-`generate_minutes`-fejltests),
+  **behold** `_write_env`- og `_maybe_apply_update`-tests, **opdatér**
+  `_needs_setup`-tests til Gemini-logik, og omdøb filen til `tests/test_setup.py`.
 - Fjern `fake_anthropic_client`-fixturen i `tests/conftest.py` (linje 122-141) og
   anthropic-referencer i fil-docstring.
 - Tilføj `tests/test_gemini_minutes.py`: verificér at `generate_minutes`
