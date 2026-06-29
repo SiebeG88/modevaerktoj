@@ -736,6 +736,31 @@ class MeetingApp:
             border_color=_CLR["card_border"],
         ).pack(anchor="w", pady=(2, 0))
 
+        # -- Gemini API-nøgle (kan indsættes/ændres når som helst)
+        self._field_label(self._settings_inner, "Gemini API-nøgle")
+        key_row = ctk.CTkFrame(self._settings_inner, fg_color="transparent")
+        key_row.pack(fill="x", pady=(0, 2))
+        self.gemini_key_entry = ctk.CTkEntry(
+            key_row, height=36, corner_radius=10, show="*",
+            placeholder_text="Indsæt din Gemini-nøgle",
+        )
+        self.gemini_key_entry.pack(side="left", fill="x", expand=True)
+        _existing_key = os.environ.get("GEMINI_API_KEY", "")
+        if _existing_key:
+            self.gemini_key_entry.insert(0, _existing_key)
+        ctk.CTkButton(
+            key_row, text="Gem nøgle", width=90, height=36, corner_radius=10,
+            fg_color=_CLR["accent"], hover_color=_CLR["accent_hover"],
+            command=self._save_gemini_key,
+        ).pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(
+            self._settings_inner,
+            text="Få en gratis nøgle på aistudio.google.com/apikey",
+            font=ctk.CTkFont(size=11),
+            text_color=_CLR["text_secondary"],
+            anchor="w",
+        ).pack(fill="x", pady=(0, 10))
+
         # ── Hero recording button area ──────────────────────────────
         hero_frame = ctk.CTkFrame(self._outer, fg_color="transparent")
         hero_frame.pack(fill="x", pady=(20, 0))
@@ -846,6 +871,15 @@ class MeetingApp:
             self._engine_hint.configure(
                 text="Hviske-v3 kører live under optagelsen på din Mac (offline)."
             )
+
+    def _save_gemini_key(self):
+        """Gem Gemini-nøglen fra indstillingsfeltet i .env + os.environ."""
+        key = self.gemini_key_entry.get().strip()
+        if not key:
+            self.status_var.set("Indtast en Gemini-nøgle først.")
+            return
+        _write_env({"GEMINI_API_KEY": key})
+        self.status_var.set("Gemini-nøgle gemt.")
 
     def _toggle_settings(self):
         if self._settings_visible:
