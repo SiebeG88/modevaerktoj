@@ -6,6 +6,17 @@ mærkes "Mig:", systemlyd-sporet "Modpart:". Linjerne sorteres på start-tid
 """
 from __future__ import annotations
 
+import re
+from difflib import SequenceMatcher
+
+_PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def _normalize(text: str) -> str:
+    """Lowercase, fjern tegnsætning, kollaps mellemrum — til lighedssammenligning."""
+    return " ".join(_PUNCT_RE.sub(" ", text.lower()).split())
+
+
 Segment = tuple[float, float, str]
 
 MIC_LABEL = "Mig"
@@ -54,6 +65,44 @@ def sanitize_segments(
 def shift_segments(segments: list[Segment], offset: float) -> list[Segment]:
     """Læg offset (sekunder) til alle start/slut-tider."""
     return [(start + offset, end + offset, text) for start, end, text in segments]
+
+
+def remove_bleed(
+    mic_segments: list[Segment],
+    sys_segments: list[Segment],
+    *,
+    overlap_tolerance: float = 4.0,
+    similarity_threshold: float = 0.80,
+    min_chars: int = 25,
+) -> list[Segment]:
+    """Fjern KONSERVATIVT 'Mig'-segmenter, der er bleed-kopier af et tids-
+    overlappende 'Modpart'-segment.
+
+    Et mic-segment droppes kun hvis len(normaliseret tekst) >= min_chars OG der
+    findes et sys-segment, hvis tidsvindue (udvidet med ±overlap_tolerance)
+    overlapper, med tekst-lighed >= similarity_threshold. Korte segmenter ('ja',
+    'mm') og ægte samtidig-tale (forskellig tekst → lav lighed) bevares.
+    Forudsætter at begge spor allerede er justeret til fælles t=0.
+    """
+    kept: list[Segment] = []
+    for m_start, m_end, m_text in mic_segments:
+        m_norm = _normalize(m_text)
+        if len(m_norm) < min_chars:
+            kept.append((m_start, m_end, m_text))
+            continue
+        is_bleed = False
+        for s_start, s_end, s_text in sys_segments:
+            if s_end + overlap_tolerance < m_start or s_start - overlap_tolerance > m_end:
+                continue
+            s_norm = _normalize(s_text)
+            if not s_norm:
+                continue
+            if SequenceMatcher(None, m_norm, s_norm).ratio() >= similarity_threshold:
+                is_bleed = True
+                break
+        if not is_bleed:
+            kept.append((m_start, m_end, m_text))
+    return kept
 
 
 def merge_tracks(

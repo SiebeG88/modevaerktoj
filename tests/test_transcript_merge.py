@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from transcript_merge import merge_tracks, sanitize_segments, shift_segments
+from transcript_merge import (merge_tracks, sanitize_segments, shift_segments, remove_bleed)
 
 
 class TestMergeTracks:
@@ -61,6 +61,28 @@ class TestSanitizeSegments:
 
     def test_empty(self):
         assert sanitize_segments([], 100.0) == []
+
+
+class TestRemoveBleed:
+    def test_drops_long_overlapping_copy(self):
+        phrase = "det her er en lang saetning der er helt ens i begge spor"
+        assert remove_bleed([(10.0, 16.0, phrase)], [(11.0, 17.0, phrase)]) == []
+
+    def test_keeps_short_segment(self):
+        assert remove_bleed([(10.0, 11.0, "Ja.")], [(10.0, 11.0, "Ja.")]) == [(10.0, 11.0, "Ja.")]
+
+    def test_keeps_genuine_double_talk(self):
+        mic = [(10.0, 16.0, "jeg synes vi skal starte med oekonomien nu")]
+        sys = [(10.0, 16.0, "kan I overhovedet hoere mig derinde paa kontoret")]
+        assert remove_bleed(mic, sys) == mic
+
+    def test_keeps_when_no_time_overlap(self):
+        phrase = "det her er en lang saetning der er helt ens i begge spor"
+        assert remove_bleed([(10.0, 16.0, phrase)], [(100.0, 106.0, phrase)]) == [(10.0, 16.0, phrase)]
+
+    def test_empty_sys_keeps_all(self):
+        mic = [(10.0, 16.0, "uanset hvad skal det her blive staaende her")]
+        assert remove_bleed(mic, []) == mic
 
 
 class TestShiftSegments:
