@@ -1415,6 +1415,32 @@ def _offset_transcript(text: str, offset_seconds: int) -> str:
     return "\n".join(out_lines)
 
 
+def _clamp_chunk_timestamps(text: str, chunk_seconds: float) -> str:
+    """Klem hvert segments [start - end]-præfiks til [0, chunk_seconds].
+
+    Modvirker Gemini-hallucinerede tidsstempler, FØR chunk-offset lægges på, så
+    urealistiske tal (fx 12 timer på et 12-min chunk) ikke forplanter sig.
+    """
+    global _TIMESTAMP_LINE_RE
+    if _TIMESTAMP_LINE_RE is None:
+        _TIMESTAMP_LINE_RE = re.compile(
+            r"^\[\s*((?:\d+:)?\d+:\d+)\s*-\s*((?:\d+:)?\d+:\d+)\s*\]"
+        )
+    out_lines = []
+    for line in text.splitlines():
+        m = _TIMESTAMP_LINE_RE.match(line)
+        if m:
+            t1 = max(0.0, min(float(_parse_timestamp(m.group(1))), chunk_seconds))
+            t2 = max(0.0, min(float(_parse_timestamp(m.group(2))), chunk_seconds))
+            if t2 < t1:
+                t2 = t1
+            rest = line[m.end():]
+            out_lines.append(f"[{format_timestamp(int(t1))} - {format_timestamp(int(t2))}]{rest}")
+        else:
+            out_lines.append(line)
+    return "\n".join(out_lines)
+
+
 class _StopRequested(Exception):
     """Brugeren har trykket Stop under transkription."""
 
@@ -1722,6 +1748,7 @@ def transcribe_with_gemini(
                 client, path, system_instruction, model, label, _status,
                 stop_event=stop_event,
             )
+            text = _clamp_chunk_timestamps(text, chunk_seconds)
             offset = idx * chunk_seconds
             return idx, _offset_transcript(text, offset), diag
 

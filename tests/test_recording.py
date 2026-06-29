@@ -281,3 +281,15 @@ class TestRecordAndTranscribeLiveDual:
         assert "Modpart:" not in transcript
         # transcribe_audio kaldt netop én gang (kun mic-sporet)
         assert mt.transcribe_audio.call_count == 1
+
+
+class TestClampChunkTimestamps:
+    def test_clamps_hallucinated_timestamps(self):
+        text = "[00:30 - 00:31] Hej.\n[50:10 - 1:10:10] Lang saetning."
+        out = mt._clamp_chunk_timestamps(text, 720)   # 12-min chunk
+        lines = out.splitlines()
+        assert lines[0] == "[00:30 - 00:31] Hej."
+        assert lines[1] == "[12:00 - 12:00] Lang saetning."
+
+    def test_leaves_lines_without_timestamp(self):
+        assert mt._clamp_chunk_timestamps("ingen tidsstempel her", 720) == "ingen tidsstempel her"
