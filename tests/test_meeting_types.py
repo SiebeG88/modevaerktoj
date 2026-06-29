@@ -147,43 +147,23 @@ class TestResolveTypeAttendees:
 
 
 class TestGenerateMinutesWithType:
-    def test_uses_type_section_grundig_citater(self, tmp_path, monkeypatch):
-        captured = {}
-
-        class FakeMessages:
-            def create(self, **kwargs):
-                captured.update(kwargs)
-                class R:
-                    content = [type("C", (), {"text": "REFERAT"})()]
-                return R()
-
-        class FakeClient:
-            messages = FakeMessages()
-
-        import anthropic
-        monkeypatch.setattr(anthropic, "Anthropic", lambda *a, **k: FakeClient())
+    def test_uses_type_section_grundig_citater(self, fake_gemini_client):
+        import google.genai as _genai
 
         typ = mt._normalize_meeting_type(
             {"navn": "Ledergruppemøde", "detaljeniveau": "grundig", "citater": True}
         )
         out = mt.generate_minutes("[00:00 - 00:05] hej", ["Anna"], "01-06-2026", meeting_type=typ)
-        assert out == "REFERAT"
-        system = captured["system"]
+        assert out == fake_gemini_client.models.generate_content.return_value.text
+        cfg = _genai.types.GenerateContentConfig.call_args
+        system = cfg.kwargs["system_instruction"]
         assert "fyldigt" in system.lower()          # detaljeniveau-prosa
         assert "Ledergruppemøde" in system          # type-navn i rollen
         assert "ABSOLUT REGEL" in system             # base bevaret
 
-    def test_none_type_falls_back_without_error(self, tmp_path, monkeypatch):
-        class FakeMessages:
-            def create(self, **kwargs):
-                class R:
-                    content = [type("C", (), {"text": "OK"})()]
-                return R()
-        class FakeClient:
-            messages = FakeMessages()
-        import anthropic
-        monkeypatch.setattr(anthropic, "Anthropic", lambda *a, **k: FakeClient())
-        assert mt.generate_minutes("x", ["A"], "01-06-2026") == "OK"
+    def test_none_type_falls_back_without_error(self, fake_gemini_client):
+        result = mt.generate_minutes("x", ["A"], "01-06-2026")
+        assert result == fake_gemini_client.models.generate_content.return_value.text
 
 
 class TestGeminiInstructionTypeName:

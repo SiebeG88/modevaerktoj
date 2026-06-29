@@ -10,7 +10,7 @@ def test_claude_all_categories():
         "steder": ["Nordmarken"],
         "fagtermer": ["ramsning"],
     }
-    out = meeting_tool.format_vocabulary_for_claude(vocab)
+    out = meeting_tool.format_vocabulary_for_minutes(vocab)
     assert "**Personer:**" in out
     assert "- Mads — driftsleder" in out
     assert "- Anna — ejer" in out
@@ -22,7 +22,7 @@ def test_claude_all_categories():
 
 def test_claude_empty_category_skipped():
     vocab = {"personer": ["Mads"], "steder": [], "fagtermer": []}
-    out = meeting_tool.format_vocabulary_for_claude(vocab)
+    out = meeting_tool.format_vocabulary_for_minutes(vocab)
     assert "**Personer:**" in out
     assert "**Steder:**" not in out
     assert "**Fagtermer:**" not in out
@@ -30,7 +30,7 @@ def test_claude_empty_category_skipped():
 
 def test_claude_all_empty_returns_placeholder():
     vocab = {"personer": [], "steder": [], "fagtermer": []}
-    out = meeting_tool.format_vocabulary_for_claude(vocab)
+    out = meeting_tool.format_vocabulary_for_minutes(vocab)
     assert out == "(ingen ordliste konfigureret)"
 
 

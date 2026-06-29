@@ -2,7 +2,6 @@
 
 Alle eksterne afhængigheder mockes her:
 - google.genai.Client (Gemini upload + generate)
-- anthropic.Anthropic (Claude messages)
 - faster_whisper.WhisperModel
 - subprocess.run / subprocess.Popen (ffmpeg, ffprobe, caffeinate)
 - time.sleep (auto-no-op for hurtige retry-tests)
@@ -116,29 +115,6 @@ def fake_gemini_client(mocker):
     # Eksponér helpers på client så tests kan bygge custom responses
     client._build_response = staticmethod(_build_response)
     client._build_uploaded_file = staticmethod(_build_uploaded_file)
-    return client
-
-
-# ----- Anthropic-klient -----
-
-@pytest.fixture
-def fake_anthropic_client(mocker):
-    """Mock anthropic.Anthropic. Default-response returnerer simpelt referat-text."""
-    client = MagicMock()
-    response = MagicMock()
-    response.content = [SimpleNamespace(text="# Referat\n\nMødet handlede om ...")]
-    client.messages.create.return_value = response
-
-    class _FakeAPIStatusError(Exception):
-        """Stand-in for anthropic.APIStatusError i tests."""
-        def __init__(self, message="", *, status_code=0, **kwargs):
-            super().__init__(message)
-            self.status_code = status_code
-
-    anthropic_module = MagicMock()
-    anthropic_module.Anthropic.return_value = client
-    anthropic_module.APIStatusError = _FakeAPIStatusError
-    mocker.patch.dict("sys.modules", {"anthropic": anthropic_module})
     return client
 
 

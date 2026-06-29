@@ -60,7 +60,7 @@ class TestNoArgs:
 
 class TestTranscriptFile:
     def test_uses_existing_transcript(self, monkeypatch, tmp_path,
-                                      fake_anthropic_client):
+                                      fake_gemini_client):
         transcript_file = tmp_path / "transcript.txt"
         transcript_file.write_text("[00:00 - 00:05] Hej alle.", encoding="utf-8")
 
@@ -89,9 +89,9 @@ class TestTranscriptFile:
         assert not any(output_dir.glob("Referat*"))
 
     def test_minutes_error_does_not_abort(self, monkeypatch, tmp_path,
-                                          fake_anthropic_client):
+                                          fake_gemini_client):
         """generate_minutes fejler → advarsel, men transkription gemmes."""
-        fake_anthropic_client.messages.create.side_effect = RuntimeError("API nede")
+        fake_gemini_client.models.generate_content.side_effect = RuntimeError("API nede")
 
         transcript_file = tmp_path / "t.txt"
         transcript_file.write_text("[00:00 - 00:05] x.", encoding="utf-8")
@@ -112,7 +112,7 @@ class TestTranscriptFile:
 
 class TestWavFileInput:
     def test_wav_file_uses_whisper(self, monkeypatch, tmp_wav, tmp_path,
-                                   fake_whisper_model, fake_anthropic_client):
+                                   fake_whisper_model, fake_gemini_client):
         output_dir = tmp_wav.parent
         code = run_main([
             str(tmp_wav),
@@ -123,7 +123,7 @@ class TestWavFileInput:
         assert fake_whisper_model.transcribe.called
 
     def test_wav_file_gemini_engine(self, monkeypatch, tmp_wav, tmp_path,
-                                    fake_gemini_client, fake_anthropic_client,
+                                    fake_gemini_client,
                                     mock_subprocess):
         mock_subprocess.run.return_value = SimpleNamespace(
             returncode=0, stdout="600.0\n", stderr="",
@@ -147,7 +147,7 @@ class TestWavFileInput:
 
     def test_m4a_file_triggers_conversion(self, monkeypatch, tmp_path,
                                           mock_subprocess, fake_whisper_model,
-                                          fake_anthropic_client):
+                                          fake_gemini_client):
         """Ikke-WAV fil → convert_to_wav → transkribér → gem."""
         m4a = tmp_path / "meeting.m4a"
         m4a.write_bytes(b"fake audio data")
@@ -182,7 +182,7 @@ class TestWavFileInput:
 
 class TestDefaultModel:
     def test_default_model_hviske(self, monkeypatch, tmp_wav,
-                                  fake_whisper_model, fake_anthropic_client):
+                                  fake_whisper_model, fake_gemini_client):
         transcribe_calls = []
 
         def fake_transcribe(path, model_size="large-v3"):
@@ -198,7 +198,7 @@ class TestDefaultModel:
         assert "hviske" in transcribe_calls[0].lower() or "v3" in transcribe_calls[0].lower()
 
     def test_default_model_gemini(self, monkeypatch, tmp_wav,
-                                  fake_gemini_client, fake_anthropic_client,
+                                  fake_gemini_client,
                                   mock_subprocess):
         mock_subprocess.run.return_value = SimpleNamespace(
             returncode=0, stdout="600.0\n", stderr="",
@@ -228,7 +228,7 @@ class TestDefaultModel:
 class TestGeminiLiveIgnored:
     def test_gemini_live_ignored(self, monkeypatch, tmp_wav, tmp_path,
                                   mock_subprocess, fake_gemini_client,
-                                  fake_anthropic_client, capsys):
+                                  capsys):
         mock_subprocess.run.return_value = SimpleNamespace(
             returncode=0, stdout="600.0\n", stderr="",
         )
@@ -266,7 +266,7 @@ class TestGeminiLiveIgnored:
 
 class TestDateFromFolder:
     def test_date_inferred_from_folder(self, monkeypatch, tmp_path,
-                                       fake_whisper_model, fake_anthropic_client):
+                                       fake_whisper_model):
         """Hvis lydfil er i mappe der hedder DD-MM-YYYY bruges det som dato."""
         date_dir = tmp_path / "22-05-2026"
         date_dir.mkdir()
@@ -291,8 +291,7 @@ class TestDateFromFolder:
         assert transcribe_calls
 
     def test_output_dir_from_audio_file_parent(self, monkeypatch, tmp_path,
-                                                fake_whisper_model,
-                                                fake_anthropic_client):
+                                                fake_whisper_model):
         """Ingen --output-dir + lydfil → output_dir = lydfils mappe."""
         wav = tmp_path / "test.wav"
         wav.write_bytes(b"\x00\x00" * 16000)
@@ -313,20 +312,9 @@ class TestDateFromFolder:
 
 class TestAttendees:
     def test_custom_attendees_in_minutes(self, monkeypatch, tmp_path,
-                                          fake_anthropic_client,
+                                          fake_gemini_client,
                                           fake_whisper_model, tmp_wav):
-        minutes_attendees = []
-
-        orig_gen = mt.generate_minutes
-
-        def fake_gen(transcript, attendees, date):
-            minutes_attendees.extend(attendees)
-            return orig_gen.__wrapped__(transcript, attendees, date) if hasattr(
-                orig_gen, "__wrapped__") else "# Referat"
-
-        fake_anthropic_client.messages.create.return_value = MagicMock(
-            content=[SimpleNamespace(text="# Referat")]
-        )
+        import google.genai as _genai
 
         output_dir = tmp_wav.parent
         run_main([
@@ -336,8 +324,8 @@ class TestAttendees:
             "--date", "22-05-2026",
         ], monkeypatch)
 
-        call = fake_anthropic_client.messages.create.call_args
-        system = call.kwargs["system"]
+        cfg = _genai.types.GenerateContentConfig.call_args
+        system = cfg.kwargs["system_instruction"]
         assert "Anna" in system
         assert "Bo" in system
         assert "Erik" in system
@@ -349,7 +337,7 @@ class TestAttendees:
 
 class TestExplicitModel:
     def test_explicit_model_is_used(self, monkeypatch, tmp_wav,
-                                     fake_whisper_model, fake_anthropic_client):
+                                     fake_whisper_model):
         transcribe_calls = []
 
         def fake_transcribe(path, model_size="large-v3"):
@@ -376,7 +364,6 @@ class TestGeminiRecordLiveWarning:
     def test_gemini_record_live_prints_warning(self, monkeypatch, tmp_path,
                                                 mock_subprocess,
                                                 fake_gemini_client,
-                                                fake_anthropic_client,
                                                 capsys):
         """--engine gemini + --record + --live → 'Ignorerer --live' advarsel."""
         # Mocker optagelse + transkription for at undgå rigtig ffmpeg
@@ -413,8 +400,7 @@ class TestGeminiRecordLiveWarning:
 
 class TestRecordClassic:
     def test_record_classic_calls_record_meeting(self, monkeypatch, tmp_path,
-                                                   fake_whisper_model,
-                                                   fake_anthropic_client):
+                                                   fake_whisper_model):
         """--record uden --live bruger record_meeting + transcribe_audio."""
         wav = tmp_path / "Driftledelsesmoede 22-05-2026.wav"
 
@@ -442,7 +428,6 @@ class TestRecordClassic:
 
     def test_record_prints_status_line(self, monkeypatch, tmp_path,
                                         fake_whisper_model,
-                                        fake_anthropic_client,
                                         capsys):
         """Når --record er sat printes 'Tilstand: Optagelse' (linje 1658)."""
         monkeypatch.setattr(mt, "record_meeting",
@@ -466,8 +451,7 @@ class TestRecordClassic:
 
 class TestRecordLive:
     def test_record_live_calls_live_function(self, monkeypatch, tmp_path,
-                                              fake_whisper_model,
-                                              fake_anthropic_client):
+                                              fake_whisper_model):
         """--record + --live kalder record_and_transcribe_live."""
         live_called = []
         wav = tmp_path / "moede.wav"
@@ -494,8 +478,7 @@ class TestRecordLive:
 # ---------------------------------------------------------------------------
 
 class TestOutputDirDefault:
-    def test_default_output_dir_is_meetings_dir(self, monkeypatch, tmp_path,
-                                                  fake_anthropic_client):
+    def test_default_output_dir_is_meetings_dir(self, monkeypatch, tmp_path):
         """Ingen --output-dir og ingen lydfil → MEETINGS_DIR / date."""
         meetings_dir = tmp_path / "moeder"
         monkeypatch.setattr(mt, "MEETINGS_DIR", meetings_dir)
@@ -519,8 +502,7 @@ class TestOutputDirDefault:
 
 class TestDateFolderMismatch:
     def test_non_date_folder_uses_today(self, monkeypatch, tmp_path,
-                                         fake_whisper_model,
-                                         fake_anthropic_client):
+                                         fake_whisper_model):
         """Mappe hedder ikke DD-MM-YYYY → brug args.date (1642->1646 branch)."""
         folder = tmp_path / "ikke-en-dato"
         folder.mkdir()
