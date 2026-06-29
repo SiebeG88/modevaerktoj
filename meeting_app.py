@@ -20,6 +20,7 @@ import json
 import math
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -355,9 +356,7 @@ class MeetingApp:
         self.start_time: float | None = None
         self.ui_queue: queue.Queue = queue.Queue()
         self.chunks_done = 0
-
-        # Settings card collapsed state
-        self._settings_visible = True
+        self._mini_hud = None  # lille altid-øverst HUD ved minimering
 
         self._build_ui()
         self._refresh_devices()
@@ -374,6 +373,17 @@ class MeetingApp:
         self.root.after(500, self._tick_timer)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Åbn guiden "Ny optagelse" ved opstart (kan springes over).
+        self.root.after(300, lambda: self._open_wizard(0))
+
+        # Vis mini-HUD når vinduet minimeres mens der optages/transkriberes.
+        self.root.bind("<Unmap>", self._on_minimize)
+        self.root.bind("<Map>", self._on_restore)
+
+        # Tastatur-genveje: Mellemrum = Start/Stop, Esc = minimér til HUD.
+        self.root.bind("<space>", self._on_space_key)
+        self.root.bind("<Escape>", self._on_escape_key)
 
     # ------------------------------------------------------------------
     # Centre on screen
@@ -414,431 +424,36 @@ class MeetingApp:
             segmented_button_unselected_color=_CLR["card"],
             segmented_button_unselected_hover_color=_CLR["card_border"],
             text_color=_CLR["text"],
+            command=self._on_tab_change,
         )
         self._tabview.pack(fill="both", expand=True, padx=0, pady=0)
         self._tabview.add("Optag")
         self._tabview.add("Transkribér fil")
         self._tabview.add("Ordliste")
         self._tabview.add("Mødetyper")
+        self._tabview.add("Historik")
+        self._tabview.add("Indstillinger")
 
-        # Optag-fanen: behold eksisterende scrollable-wrapper
-        self._outer = ctk.CTkScrollableFrame(
-            self._tabview.tab("Optag"),
-            fg_color=_CLR["bg"],
-            scrollbar_button_color=_CLR["card_border"],
-            scrollbar_button_hover_color=_CLR["accent"],
-        )
-        self._outer.pack(fill="both", expand=True, padx=0, pady=0)
-
-        # ── Header ──────────────────────────────────────────────────
-        header = ctk.CTkFrame(self._outer, fg_color="transparent")
-        header.pack(fill="x", padx=28, pady=(24, 4))
-
-        ctk.CTkLabel(
-            header,
-            text="Mødeværktøj",
-            font=ctk.CTkFont(family="SF Pro Display", size=32, weight="bold"),
-            text_color=_CLR["text"],
-        ).pack(anchor="w")
-
-        ctk.CTkLabel(
-            header,
-            text="Optag  ·  Transkriber  ·  Referat",
-            font=ctk.CTkFont(family="SF Pro Text", size=14),
-            text_color=_CLR["text_secondary"],
-        ).pack(anchor="w", pady=(2, 0))
-
-        # ── Settings card ───────────────────────────────────────────
-        self._settings_card = ctk.CTkFrame(
-            self._outer,
-            fg_color=_CLR["card"],
-            corner_radius=16,
-            border_width=1,
-            border_color=_CLR["card_border"],
-        )
-        self._settings_card.pack(fill="x", padx=24, pady=(16, 0))
-
-        # Card header with collapse toggle
-        card_header = ctk.CTkFrame(self._settings_card, fg_color="transparent")
-        card_header.pack(fill="x", padx=20, pady=(16, 4))
-
-        ctk.CTkLabel(
-            card_header,
-            text="Indstillinger",
-            font=ctk.CTkFont(family="SF Pro Display", size=16, weight="bold"),
-            text_color=_CLR["text"],
-        ).pack(side="left")
-
-        self._toggle_btn = ctk.CTkButton(
-            card_header,
-            text="Skjul",
-            width=60,
-            height=28,
-            corner_radius=8,
-            font=ctk.CTkFont(size=12),
-            fg_color="transparent",
-            text_color=_CLR["accent"],
-            hover_color="#e0e7ff",
-            command=self._toggle_settings,
-        )
-        self._toggle_btn.pack(side="right")
-
-        # Inner frame for settings fields (what gets hidden/shown)
-        self._settings_inner = ctk.CTkFrame(self._settings_card, fg_color="transparent")
-        self._settings_inner.pack(fill="x", padx=20, pady=(4, 16))
-
-        # -- Parent folder
-        self._field_label(self._settings_inner, "Overordnet mappe")
-        folder_row = ctk.CTkFrame(self._settings_inner, fg_color="transparent")
-        folder_row.pack(fill="x", pady=(0, 10))
-
+        # Alle delte variabler oprettes FØRST, så hjælpe-metoder (motorvalg,
+        # systemlyd, mødetype) virker uanset hvilke widgets der p.t. er bygget.
         self.folder_var = ctk.StringVar()
-        self._folder_entry = ctk.CTkEntry(
-            folder_row,
-            textvariable=self.folder_var,
-            height=36,
-            corner_radius=10,
-            border_width=1,
-            border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
-            text_color=_CLR["text"],
-            placeholder_text_color=_CLR["text_placeholder"],
-            font=ctk.CTkFont(size=13),
-        )
-        self._folder_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
-
-        ctk.CTkButton(
-            folder_row,
-            text="Gennemse ...",
-            width=110,
-            height=36,
-            corner_radius=10,
-            fg_color=_CLR["accent"],
-            hover_color=_CLR["accent_hover"],
-            font=ctk.CTkFont(size=13),
-            command=self._pick_folder,
-        ).pack(side="right")
-
-        # -- Mødetype dropdown
-        self._field_label(self._settings_inner, "Mødetype")
-        _type_labels = [self._meeting_types[k]["navn"] for k in self._type_keys]
-        self.type_var = ctk.StringVar(value=self._meeting_types[self._type_key]["navn"])
-        self.type_combo = ctk.CTkComboBox(
-            self._settings_inner,
-            variable=self.type_var,
-            values=_type_labels,
-            height=36,
-            corner_radius=10,
-            border_width=1,
-            border_color=_CLR["card_border"],
-            state="readonly",
-            fg_color="#f8fafc",
-            button_color=_CLR["accent"],
-            button_hover_color=_CLR["accent_hover"],
-            text_color=_CLR["text"],
-            dropdown_fg_color=_CLR["card"],
-            dropdown_hover_color="#e0e7ff",
-            font=ctk.CTkFont(size=13),
-            command=self._on_type_selected,
-        )
-        self.type_combo.pack(fill="x", pady=(0, 10))
-
-        # -- Meeting name
-        self._field_label(self._settings_inner, "Mødenavn")
         self.name_var = ctk.StringVar()
-        ctk.CTkEntry(
-            self._settings_inner,
-            textvariable=self.name_var,
-            height=36,
-            corner_radius=10,
-            border_width=1,
-            border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
-            text_color=_CLR["text"],
-            placeholder_text_color=_CLR["text_placeholder"],
-            font=ctk.CTkFont(size=13),
-        ).pack(fill="x", pady=(0, 10))
-
-        # -- Date + Participants side by side
-        row2 = ctk.CTkFrame(self._settings_inner, fg_color="transparent")
-        row2.pack(fill="x", pady=(0, 10))
-        row2.columnconfigure(0, weight=1)
-        row2.columnconfigure(1, weight=2)
-
-        # Date
-        date_frame = ctk.CTkFrame(row2, fg_color="transparent")
-        date_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        self._field_label(date_frame, "Dato")
         self.date_var = ctk.StringVar(value=datetime.now().strftime("%d-%m-%Y"))
-        ctk.CTkEntry(
-            date_frame,
-            textvariable=self.date_var,
-            height=36,
-            corner_radius=10,
-            border_width=1,
-            border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
-            text_color=_CLR["text"],
-            placeholder_text_color=_CLR["text_placeholder"],
-            font=ctk.CTkFont(size=13),
-        ).pack(fill="x")
-
-        # Participants
-        att_frame = ctk.CTkFrame(row2, fg_color="transparent")
-        att_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-        self._field_label(att_frame, "Deltagere (komma-adskilt)")
         self.attendees_var = ctk.StringVar(value=", ".join(DEFAULT_ATTENDEES))
-        ctk.CTkEntry(
-            att_frame,
-            textvariable=self.attendees_var,
-            height=36,
-            corner_radius=10,
-            border_width=1,
-            border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
-            text_color=_CLR["text"],
-            placeholder_text_color=_CLR["text_placeholder"],
-            font=ctk.CTkFont(size=13),
-        ).pack(fill="x")
-
-        # -- Microphone selector
-        self._field_label(self._settings_inner, "Mikrofon")
-        mic_row = ctk.CTkFrame(self._settings_inner, fg_color="transparent")
-        mic_row.pack(fill="x", pady=(0, 10))
-
         self.device_var = ctk.StringVar()
-        self.device_combo = ctk.CTkComboBox(
-            mic_row,
-            variable=self.device_var,
-            height=36,
-            corner_radius=10,
-            border_width=1,
-            border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
-            text_color=_CLR["text"],
-            button_color=_CLR["accent"],
-            button_hover_color=_CLR["accent_hover"],
-            dropdown_fg_color=_CLR["card"],
-            dropdown_hover_color="#e0e7ff",
-            font=ctk.CTkFont(size=13),
-            state="readonly",
-        )
-        self.device_combo.pack(side="left", fill="x", expand=True, padx=(0, 8))
-
-        ctk.CTkButton(
-            mic_row,
-            text="Opdater",
-            width=80,
-            height=36,
-            corner_radius=10,
-            fg_color="transparent",
-            border_width=1,
-            border_color=_CLR["card_border"],
-            text_color=_CLR["text"],
-            hover_color="#e0e7ff",
-            font=ctk.CTkFont(size=13),
-            command=self._refresh_devices,
-        ).pack(side="right")
-
-        # -- Systemlyd (dual-track via BlackHole)
         self.system_audio_var = ctk.BooleanVar(value=False)
-        self.system_audio_check = ctk.CTkCheckBox(
-            self._settings_inner,
-            text="Optag systemlyd (Meet/Teams/telefon)",
-            variable=self.system_audio_var,
-            command=self._on_system_audio_toggle,
-            text_color=_CLR["text"],
-            font=ctk.CTkFont(size=13),
-        )
-        self.system_audio_check.pack(fill="x", pady=(0, 4))
-
-        self.system_audio_status = ctk.CTkLabel(
-            self._settings_inner,
-            text="",
-            font=ctk.CTkFont(size=11),
-            text_color=_CLR["text_secondary"],
-            anchor="w",
-            justify="left",
-        )
-        self.system_audio_status.pack(fill="x", pady=(0, 4))
-
-        self.setup_audio_btn = ctk.CTkButton(
-            self._settings_inner,
-            text="Opsæt systemlyd",
-            height=32,
-            corner_radius=8,
-            fg_color="transparent",
-            border_width=1,
-            border_color=_CLR["card_border"],
-            text_color=_CLR["text"],
-            hover_color="#e0e7ff",
-            font=ctk.CTkFont(size=13),
-            command=self._setup_system_audio,
-        )
-        self.setup_audio_btn.pack(fill="x", pady=(0, 10))
-
-        # -- Transkriptions-motor (segmented control)
-        self._field_label(self._settings_inner, "Transkription")
         self.engine_var = ctk.StringVar(value=DEFAULT_ENGINE)
-
-        engine_frame = ctk.CTkFrame(
-            self._settings_inner,
-            fg_color="#f1f5f9",
-            corner_radius=10,
-        )
-        engine_frame.pack(fill="x", pady=(0, 4))
-
-        self._engine_buttons: dict[str, ctk.CTkButton] = {}
-        engine_options = [
-            ("hviske", "Hviske (live, lokalt)"),
-            ("gemini", "Gemini (efter, cloud)"),
-        ]
-        for val, label in engine_options:
-            btn = ctk.CTkButton(
-                engine_frame,
-                text=label,
-                height=32,
-                corner_radius=8,
-                font=ctk.CTkFont(size=13),
-                fg_color="transparent",
-                text_color=_CLR["text_secondary"],
-                hover_color="#e0e7ff",
-                command=lambda v=val: self._select_engine(v),
-            )
-            btn.pack(side="left", fill="x", expand=True, padx=3, pady=3)
-            self._engine_buttons[val] = btn
-
-        self._engine_hint = ctk.CTkLabel(
-            self._settings_inner,
-            text="",
-            font=ctk.CTkFont(size=11),
-            text_color=_CLR["text_secondary"],
-            anchor="w",
-            justify="left",
-        )
-        self._engine_hint.pack(fill="x", pady=(0, 10))
-
-        # Highlight default engine
-        self._select_engine(self.engine_var.get())
-
-        # -- Generate minutes checkbox
         self.minutes_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            self._settings_inner,
-            text="Generer referat efter optagelse",
-            variable=self.minutes_var,
-            font=ctk.CTkFont(size=13),
-            text_color=_CLR["text"],
-            fg_color=_CLR["accent"],
-            hover_color=_CLR["accent_hover"],
-            corner_radius=6,
-            border_width=2,
-            border_color=_CLR["card_border"],
-        ).pack(anchor="w", pady=(2, 0))
+        self.type_var = ctk.StringVar(value=self._meeting_types[self._type_key]["navn"])
+        # Mødeform styrer systemlyd-default: fysisk = kun mik, online/telefon = + modpart
+        self.meeting_form_var = ctk.StringVar(value="fysisk")
+        self._engine_buttons = {}
+        self._wizard = None
 
-        # -- Gemini API-nøgle (kan indsættes/ændres når som helst)
-        self._field_label(self._settings_inner, "Gemini API-nøgle")
-        key_row = ctk.CTkFrame(self._settings_inner, fg_color="transparent")
-        key_row.pack(fill="x", pady=(0, 2))
-        self.gemini_key_entry = ctk.CTkEntry(
-            key_row, height=36, corner_radius=10, show="*",
-            placeholder_text="Indsæt din Gemini-nøgle",
-        )
-        self.gemini_key_entry.pack(side="left", fill="x", expand=True)
-        _existing_key = os.environ.get("GEMINI_API_KEY", "")
-        if _existing_key:
-            self.gemini_key_entry.insert(0, _existing_key)
-        ctk.CTkButton(
-            key_row, text="Gem nøgle", width=90, height=36, corner_radius=10,
-            fg_color=_CLR["accent"], hover_color=_CLR["accent_hover"],
-            command=self._save_gemini_key,
-        ).pack(side="left", padx=(8, 0))
-        ctk.CTkLabel(
-            self._settings_inner,
-            text="Få en gratis nøgle på aistudio.google.com/apikey",
-            font=ctk.CTkFont(size=11),
-            text_color=_CLR["text_secondary"],
-            anchor="w",
-        ).pack(fill="x", pady=(0, 10))
-
-        # -- Version + manuel opdaterings-knap. Kun på frosset Windows-bundle:
-        # OTA-swap (apply_and_restart) er Windows-only, og kildekode-kørsel
-        # opdateres med `git pull`, ikke via Releases.
-        import app_paths
-        from _version import __version__
-        if app_paths.is_frozen() and sys.platform == "win32":
-            self._field_label(self._settings_inner, "Opdatering")
-            update_row = ctk.CTkFrame(self._settings_inner, fg_color="transparent")
-            update_row.pack(fill="x", pady=(0, 4))
-            ctk.CTkLabel(
-                update_row,
-                text=f"Version {__version__}",
-                font=ctk.CTkFont(size=12),
-                text_color=_CLR["text_secondary"],
-            ).pack(side="left")
-            self._update_btn = ctk.CTkButton(
-                update_row, text="Søg efter opdatering", width=180, height=36,
-                corner_radius=10, fg_color=_CLR["accent"],
-                hover_color=_CLR["accent_hover"],
-                command=self._check_update_now,
-            )
-            self._update_btn.pack(side="right")
-
-        # ── Hero recording button area ──────────────────────────────
-        hero_frame = ctk.CTkFrame(self._outer, fg_color="transparent")
-        hero_frame.pack(fill="x", pady=(20, 0))
-
-        self.hero_btn = HeroButton(
-            hero_frame,
-            command=self._toggle_recording,
-            bg=_CLR["bg"],
-        )
-        self.hero_btn.pack(anchor="center")
-
-        # Timer label directly below button
-        self.timer_var = ctk.StringVar(value="00:00:00")
-        self.timer_label = ctk.CTkLabel(
-            hero_frame,
-            textvariable=self.timer_var,
-            font=ctk.CTkFont(family="SF Mono", size=28, weight="bold"),
-            text_color=_CLR["text"],
-        )
-        self.timer_label.pack(anchor="center", pady=(6, 0))
-
-        # ── Status / Log card ───────────────────────────────────────
-        log_card = ctk.CTkFrame(
-            self._outer,
-            fg_color=_CLR["card"],
-            corner_radius=16,
-            border_width=1,
-            border_color=_CLR["card_border"],
-        )
-        log_card.pack(fill="both", expand=True, padx=24, pady=(16, 24))
-
-        # Status line
-        self.status_var = ctk.StringVar(value="Klar. Vaelg mappe og navngiv moedet.")
-        ctk.CTkLabel(
-            log_card,
-            textvariable=self.status_var,
-            font=ctk.CTkFont(size=13),
-            text_color=_CLR["text_secondary"],
-            anchor="w",
-        ).pack(fill="x", padx=16, pady=(14, 6))
-
-        # Log textbox
-        self.log = ctk.CTkTextbox(
-            log_card,
-            height=180,
-            corner_radius=10,
-            border_width=1,
-            border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
-            font=ctk.CTkFont(family="SF Mono", size=12),
-            text_color=_CLR["text"],
-            wrap="word",
-            state="disabled",
-        )
-        self.log.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        # Optag-fanen er nu en ren OPTAGE-skærm; al per-møde-opsætning sker i guiden.
+        self._build_record_screen(self._tabview.tab("Optag"))
+        # Vedvarende/avancerede indstillinger får deres egen fane.
+        self._build_settings_tab(self._tabview.tab("Indstillinger"))
 
         # Byg Transkribér fil-fanen
         self._transcribe_tab = TranscribeFileTab(
@@ -854,6 +469,9 @@ class MeetingApp:
             on_change=self._on_meeting_types_changed,
         )
 
+        # Byg Historik-fanen
+        self._historik_tab = HistorikTab(self._tabview.tab("Historik"), self)
+
     # ------------------------------------------------------------------
     # Small helpers
     # ------------------------------------------------------------------
@@ -867,6 +485,411 @@ class MeetingApp:
             text_color=_CLR["text_secondary"],
             anchor="w",
         ).pack(fill="x", pady=(0, 3))
+
+    # ------------------------------------------------------------------
+    # Optage-skærm (Optag-fanen) + Indstillinger-fane + guide
+    # ------------------------------------------------------------------
+
+    def _build_record_screen(self, parent):
+        """Optag-fanen: ren optage-skærm med konfig-oversigt + stor knap."""
+        outer = ctk.CTkScrollableFrame(
+            parent, fg_color=_CLR["bg"],
+            scrollbar_button_color=_CLR["card_border"],
+            scrollbar_button_hover_color=_CLR["accent"],
+        )
+        outer.pack(fill="both", expand=True)
+
+        header = ctk.CTkFrame(outer, fg_color="transparent")
+        header.pack(fill="x", padx=28, pady=(24, 4))
+        ctk.CTkLabel(
+            header, text="Mødeværktøj",
+            font=ctk.CTkFont(family="SF Pro Display", size=32, weight="bold"),
+            text_color=_CLR["text"],
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            header, text="Optag  ·  Transkribér  ·  Referat",
+            font=ctk.CTkFont(family="SF Pro Text", size=14),
+            text_color=_CLR["text_secondary"],
+        ).pack(anchor="w", pady=(2, 0))
+
+        # — Konfig-oversigtskort
+        card = ctk.CTkFrame(
+            outer, fg_color=_CLR["card"], corner_radius=16,
+            border_width=1, border_color=_CLR["card_border"],
+        )
+        card.pack(fill="x", padx=24, pady=(16, 0))
+
+        card_head = ctk.CTkFrame(card, fg_color="transparent")
+        card_head.pack(fill="x", padx=20, pady=(16, 8))
+        ctk.CTkLabel(
+            card_head, text="Klar til optagelse",
+            font=ctk.CTkFont(family="SF Pro Display", size=16, weight="bold"),
+            text_color=_CLR["text"],
+        ).pack(side="left")
+        ctk.CTkButton(
+            card_head, text="Ny optagelse", height=32, corner_radius=8,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=_CLR["accent"], hover_color=_CLR["accent_hover"],
+            command=lambda: self._open_wizard(0),
+        ).pack(side="right")
+
+        rows = ctk.CTkFrame(card, fg_color="transparent")
+        rows.pack(fill="x", padx=20, pady=(0, 12))
+        self._sum_labels = {}
+
+        def _row(key, caption, on_change):
+            r = ctk.CTkFrame(rows, fg_color="transparent")
+            r.pack(fill="x", pady=3)
+            ctk.CTkLabel(
+                r, text=caption, width=92, anchor="w",
+                font=ctk.CTkFont(size=12), text_color=_CLR["text_secondary"],
+            ).pack(side="left")
+            val = ctk.CTkLabel(
+                r, text="—", anchor="w", justify="left",
+                font=ctk.CTkFont(size=13, weight="bold"), text_color=_CLR["text"],
+            )
+            val.pack(side="left", fill="x", expand=True, padx=(6, 6))
+            ctk.CTkButton(
+                r, text="Skift", width=54, height=26, corner_radius=7,
+                font=ctk.CTkFont(size=12), fg_color="transparent",
+                border_width=1, border_color=_CLR["card_border"],
+                text_color=_CLR["accent"], hover_color="#e0e7ff",
+                command=on_change,
+            ).pack(side="right")
+            self._sum_labels[key] = val
+
+        _row("form", "Mødeform", lambda: self._open_wizard(0))
+        _row("type", "Mødetype", lambda: self._open_wizard(1))
+        _row("name", "Navn", lambda: self._open_wizard(2))
+        _row("attendees", "Deltagere", lambda: self._open_wizard(2))
+        _row("engine", "Motor", lambda: self._open_wizard(3))
+        _row("mic", "Mikrofon", lambda: self._tabview.set("Indstillinger"))
+        _row("folder", "Mappe", lambda: self._tabview.set("Indstillinger"))
+
+        ctk.CTkCheckBox(
+            card, text="Generér referat efter optagelse",
+            variable=self.minutes_var, font=ctk.CTkFont(size=13),
+            text_color=_CLR["text"], fg_color=_CLR["accent"],
+            hover_color=_CLR["accent_hover"], corner_radius=6,
+            border_width=2, border_color=_CLR["card_border"],
+        ).pack(anchor="w", padx=20, pady=(0, 16))
+
+        # — Hero record-knap
+        hero_frame = ctk.CTkFrame(outer, fg_color="transparent")
+        hero_frame.pack(fill="x", pady=(20, 0))
+        self.hero_btn = HeroButton(hero_frame, command=self._toggle_recording, bg=_CLR["bg"])
+        self.hero_btn.pack(anchor="center")
+        self.timer_var = ctk.StringVar(value="00:00:00")
+        self.timer_label = ctk.CTkLabel(
+            hero_frame, textvariable=self.timer_var,
+            font=ctk.CTkFont(family="SF Mono", size=28, weight="bold"),
+            text_color=_CLR["text"],
+        )
+        self.timer_label.pack(anchor="center", pady=(6, 0))
+
+        # — Status / log
+        log_card = ctk.CTkFrame(
+            outer, fg_color=_CLR["card"], corner_radius=16,
+            border_width=1, border_color=_CLR["card_border"],
+        )
+        log_card.pack(fill="both", expand=True, padx=24, pady=(16, 24))
+        self.status_var = ctk.StringVar(value="Klar. Tryk på den store knap for at starte.")
+        ctk.CTkLabel(
+            log_card, textvariable=self.status_var,
+            font=ctk.CTkFont(size=13), text_color=_CLR["text_secondary"],
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(14, 6))
+        self.log = ctk.CTkTextbox(
+            log_card, height=160, corner_radius=10,
+            border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
+            font=ctk.CTkFont(family="SF Mono", size=12), text_color=_CLR["text"],
+            wrap="word", state="disabled",
+        )
+        self.log.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+
+        # Hold oversigten synkron med variablerne (også ved inline-redigering).
+        for _v in (self.name_var, self.attendees_var, self.type_var,
+                   self.engine_var, self.folder_var, self.device_var,
+                   self.system_audio_var):
+            _v.trace_add("write", lambda *a: self._refresh_summary())
+
+    def _build_settings_tab(self, parent):
+        """Indstillinger-fanen: vedvarende/avancerede valg, grupperet i kort."""
+        parent.configure(fg_color=_CLR["bg"])
+        outer = ctk.CTkScrollableFrame(
+            parent, fg_color=_CLR["bg"],
+            scrollbar_button_color=_CLR["card_border"],
+            scrollbar_button_hover_color=_CLR["accent"],
+        )
+        outer.pack(fill="both", expand=True)
+
+        ctk.CTkLabel(
+            outer, text="Indstillinger",
+            font=ctk.CTkFont(family="SF Pro Display", size=28, weight="bold"),
+            text_color=_CLR["text"],
+        ).pack(anchor="w", padx=28, pady=(24, 4))
+        ctk.CTkLabel(
+            outer, text="Gemmes og genbruges på tværs af møder.",
+            font=ctk.CTkFont(size=13), text_color=_CLR["text_secondary"],
+        ).pack(anchor="w", padx=28, pady=(0, 12))
+
+        def _card(title):
+            c = ctk.CTkFrame(
+                outer, fg_color=_CLR["card"], corner_radius=16,
+                border_width=1, border_color=_CLR["card_border"],
+            )
+            c.pack(fill="x", padx=24, pady=(0, 16))
+            inner = ctk.CTkFrame(c, fg_color="transparent")
+            inner.pack(fill="x", padx=20, pady=16)
+            ctk.CTkLabel(
+                inner, text=title,
+                font=ctk.CTkFont(family="SF Pro Display", size=15, weight="bold"),
+                text_color=_CLR["text"],
+            ).pack(anchor="w", pady=(0, 10))
+            return inner
+
+        # — Lagring
+        store = _card("Lagring")
+        self._field_label(store, "Overordnet mappe")
+        folder_row = ctk.CTkFrame(store, fg_color="transparent")
+        folder_row.pack(fill="x", pady=(0, 0))
+        self._folder_entry = ctk.CTkEntry(
+            folder_row, textvariable=self.folder_var, height=36, corner_radius=10,
+            border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
+            text_color=_CLR["text"], placeholder_text_color=_CLR["text_placeholder"],
+            font=ctk.CTkFont(size=13),
+        )
+        self._folder_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(
+            folder_row, text="Gennemse …", width=110, height=36, corner_radius=10,
+            fg_color=_CLR["accent"], hover_color=_CLR["accent_hover"],
+            font=ctk.CTkFont(size=13), command=self._pick_folder,
+        ).pack(side="right")
+
+        # — Lyd
+        audio = _card("Lyd")
+        self._field_label(audio, "Standard-mikrofon")
+        mic_row = ctk.CTkFrame(audio, fg_color="transparent")
+        mic_row.pack(fill="x", pady=(0, 10))
+        self.device_combo = ctk.CTkComboBox(
+            mic_row, variable=self.device_var, height=36, corner_radius=10,
+            border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
+            text_color=_CLR["text"], button_color=_CLR["accent"],
+            button_hover_color=_CLR["accent_hover"], dropdown_fg_color=_CLR["card"],
+            dropdown_hover_color="#e0e7ff", font=ctk.CTkFont(size=13), state="readonly",
+        )
+        self.device_combo.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(
+            mic_row, text="Opdater", width=80, height=36, corner_radius=10,
+            fg_color="transparent", border_width=1, border_color=_CLR["card_border"],
+            text_color=_CLR["text"], hover_color="#e0e7ff", font=ctk.CTkFont(size=13),
+            command=self._refresh_devices,
+        ).pack(side="right")
+        if sys.platform != "win32":
+            self.system_audio_check = ctk.CTkCheckBox(
+                audio, text="Optag systemlyd (Meet/Teams/telefon)",
+                variable=self.system_audio_var, command=self._on_system_audio_toggle,
+                text_color=_CLR["text"], font=ctk.CTkFont(size=13),
+            )
+            self.system_audio_check.pack(fill="x", pady=(0, 4))
+            self.system_audio_status = ctk.CTkLabel(
+                audio, text="", font=ctk.CTkFont(size=11),
+                text_color=_CLR["text_secondary"], anchor="w", justify="left",
+            )
+            self.system_audio_status.pack(fill="x", pady=(0, 4))
+            self.setup_audio_btn = ctk.CTkButton(
+                audio, text="Opsæt systemlyd", height=32, corner_radius=8,
+                fg_color="transparent", border_width=1, border_color=_CLR["card_border"],
+                text_color=_CLR["text"], hover_color="#e0e7ff", font=ctk.CTkFont(size=13),
+                command=self._setup_system_audio,
+            )
+            self.setup_audio_btn.pack(fill="x", pady=(0, 0))
+        else:
+            ctk.CTkLabel(
+                audio,
+                text="På Windows optages kun din mikrofon. Systemlyd (modparten) kræver macOS.",
+                font=ctk.CTkFont(size=11), text_color=_CLR["text_secondary"],
+                anchor="w", justify="left", wraplength=520,
+            ).pack(fill="x")
+
+        # — Transkription
+        trans = _card("Transkription")
+        self._field_label(trans, "Standard-motor")
+        engine_frame = ctk.CTkFrame(trans, fg_color="#f1f5f9", corner_radius=10)
+        engine_frame.pack(fill="x", pady=(0, 4))
+        for val, label in (("hviske", "Hviske (live, lokalt)"),
+                           ("gemini", "Gemini (efter, cloud)")):
+            btn = ctk.CTkButton(
+                engine_frame, text=label, height=32, corner_radius=8,
+                font=ctk.CTkFont(size=13), fg_color="transparent",
+                text_color=_CLR["text_secondary"], hover_color="#e0e7ff",
+                command=lambda v=val: self._select_engine(v),
+            )
+            btn.pack(side="left", fill="x", expand=True, padx=3, pady=3)
+            self._engine_buttons[val] = btn
+        self._engine_hint = ctk.CTkLabel(
+            trans, text="", font=ctk.CTkFont(size=11),
+            text_color=_CLR["text_secondary"], anchor="w", justify="left", wraplength=520,
+        )
+        self._engine_hint.pack(fill="x", pady=(0, 10))
+        self._select_engine(self.engine_var.get())
+        self._field_label(trans, "Gemini API-nøgle")
+        key_row = ctk.CTkFrame(trans, fg_color="transparent")
+        key_row.pack(fill="x", pady=(0, 2))
+        self.gemini_key_entry = ctk.CTkEntry(
+            key_row, height=36, corner_radius=10, show="*",
+            placeholder_text="Indsæt din Gemini-nøgle",
+        )
+        self.gemini_key_entry.pack(side="left", fill="x", expand=True)
+        _existing_key = os.environ.get("GEMINI_API_KEY", "")
+        if _existing_key:
+            self.gemini_key_entry.insert(0, _existing_key)
+        ctk.CTkButton(
+            key_row, text="Gem nøgle", width=90, height=36, corner_radius=10,
+            fg_color=_CLR["accent"], hover_color=_CLR["accent_hover"],
+            command=self._save_gemini_key,
+        ).pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(
+            trans, text="Få en gratis nøgle på aistudio.google.com/apikey",
+            font=ctk.CTkFont(size=11), text_color=_CLR["text_secondary"], anchor="w",
+        ).pack(fill="x", pady=(2, 0))
+
+        # — Om & opdatering
+        import app_paths
+        from _version import __version__
+        about = _card("Om & opdatering")
+        ver_row = ctk.CTkFrame(about, fg_color="transparent")
+        ver_row.pack(fill="x")
+        ctk.CTkLabel(
+            ver_row, text=f"Version {__version__}",
+            font=ctk.CTkFont(size=12), text_color=_CLR["text_secondary"],
+        ).pack(side="left")
+        if app_paths.is_frozen() and sys.platform == "win32":
+            self._update_btn = ctk.CTkButton(
+                ver_row, text="Søg efter opdatering", width=180, height=36,
+                corner_radius=10, fg_color=_CLR["accent"],
+                hover_color=_CLR["accent_hover"], command=self._check_update_now,
+            )
+            self._update_btn.pack(side="right")
+
+    def _refresh_summary(self):
+        labels = getattr(self, "_sum_labels", None)
+        if not labels:
+            return
+        form_map = {
+            "fysisk": "Fysisk møde (i lokalet)",
+            "online": "Online møde (Teams/Meet)",
+            "telefon": "Telefonopkald",
+        }
+        form = form_map.get(self.meeting_form_var.get(), "—")
+        if self.system_audio_var.get():
+            form += "  ·  systemlyd TIL"
+        elif self.meeting_form_var.get() in ("online", "telefon"):
+            form += "  ·  kun mikrofon"
+        engine_map = {"hviske": "Hviske (lokal, offline)", "gemini": "Gemini (cloud)"}
+
+        def _set(key, text):
+            w = labels.get(key)
+            if w is not None and w.winfo_exists():
+                w.configure(text=text if text else "—")
+
+        _set("form", form)
+        _set("type", self.type_var.get())
+        _set("name", self.name_var.get())
+        _set("attendees", self.attendees_var.get())
+        _set("engine", engine_map.get(self.engine_var.get(), self.engine_var.get()))
+        _set("mic", self._selected_device_name())
+        _set("folder", self.folder_var.get())
+
+    def _open_wizard(self, start_step=0):
+        if self.recording or self.transcribing:
+            return
+        if self._wizard is not None and self._wizard.winfo_exists():
+            self._wizard.go_to(start_step)
+            self._wizard.focus()
+            return
+        self._wizard = MeetingWizard(self, start_step=start_step)
+
+    # ------------------------------------------------------------------
+    # Mini-HUD (minimeret tilstand)
+    # ------------------------------------------------------------------
+
+    def _on_minimize(self, event=None):
+        if event is not None and event.widget is not self.root:
+            return
+        if self.recording or self.transcribing:
+            self._show_mini_hud()
+
+    def _on_restore(self, event=None):
+        if event is not None and event.widget is not self.root:
+            return
+        self._hide_mini_hud()
+
+    def _show_mini_hud(self):
+        if self._mini_hud is None or not self._mini_hud.winfo_exists():
+            self._mini_hud = MiniHUD(self)
+        hud = self._mini_hud
+        if self.transcribing:
+            hud.set_transcribing()
+        else:
+            hud.set_recording()
+            hud.set_timer(self.timer_var.get())
+        hud.set_meeting(self.name_var.get().strip() or self.type_var.get())
+        try:
+            hud.deiconify()
+            hud.lift()
+            hud.attributes("-topmost", True)
+        except Exception:
+            pass
+
+    def _hide_mini_hud(self):
+        if self._mini_hud is not None and self._mini_hud.winfo_exists():
+            try:
+                self._mini_hud.withdraw()
+            except Exception:
+                pass
+
+    def _restore_from_hud(self):
+        self._hide_mini_hud()
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Faneskift + tastatur-genveje
+    # ------------------------------------------------------------------
+
+    def _on_tab_change(self, *_):
+        try:
+            if (self._tabview.get() == "Historik"
+                    and getattr(self, "_historik_tab", None) is not None):
+                self._historik_tab.refresh()
+        except Exception:
+            pass
+
+    def _on_space_key(self, event=None):
+        w = self.root.focus_get()
+        try:
+            cls = w.winfo_class() if w is not None else ""
+        except Exception:
+            cls = ""
+        # Lad mellemrum virke normalt i tekstfelter.
+        if cls in ("Entry", "TEntry", "Text"):
+            return
+        if self._tabview.get() != "Optag":
+            return
+        self._toggle_recording()
+        return "break"
+
+    def _on_escape_key(self, event=None):
+        if self.recording or self.transcribing:
+            try:
+                self.root.iconify()
+            except Exception:
+                pass
 
     def _select_engine(self, value: str):
         self.engine_var.set(value)
@@ -944,16 +967,6 @@ class MeetingApp:
         self.status_var.set(msg)
         self._update_btn.configure(state="normal", text="Søg efter opdatering")
 
-    def _toggle_settings(self):
-        if self._settings_visible:
-            self._settings_inner.pack_forget()
-            self._toggle_btn.configure(text="Vis")
-            self._settings_visible = False
-        else:
-            self._settings_inner.pack(fill="x", padx=20, pady=(4, 16))
-            self._toggle_btn.configure(text="Skjul")
-            self._settings_visible = True
-
     # ------------------------------------------------------------------
     # Mødetype
     # ------------------------------------------------------------------
@@ -977,17 +990,19 @@ class MeetingApp:
         self.attendees_var.set(", ".join(attendees))
 
     def refresh_meeting_types(self):
-        """Genindlæs mødetyper fra disk og opdatér optage-fanens dropdown.
+        """Genindlæs mødetyper fra disk og opdatér oversigt + evt. åben guide.
 
-        Spejler TranscribeFileTab.refresh_meeting_types — kaldes når en type
-        oprettes/redigeres/slettes i Mødetyper-fanen. Bevarer markeringen hvis
-        den stadig findes; ellers falder den tilbage til første type."""
+        Kaldes når en type oprettes/redigeres/slettes i Mødetyper-fanen. Bevarer
+        markeringen hvis den stadig findes; ellers falder den tilbage til første
+        type. type_combo findes kun mens guiden er åben — derfor vagten."""
         self._meeting_types = meeting_tool.load_meeting_types(CONFIG_DIR)
         self._type_keys = list(self._meeting_types)
         if self._type_key not in self._meeting_types:
             self._type_key = self._type_keys[0]
         labels = [self._meeting_types[k]["navn"] for k in self._type_keys]
-        self.type_combo.configure(values=labels)
+        if (getattr(self, "type_combo", None) is not None
+                and self.type_combo.winfo_exists()):
+            self.type_combo.configure(values=labels)
         self.type_var.set(self._meeting_types[self._type_key]["navn"])
 
     def _on_meeting_types_changed(self):
@@ -1020,7 +1035,8 @@ class MeetingApp:
         if last_engine in ("hviske", "gemini"):
             self._select_engine(last_engine)
         # Husk om systemlyd-optagelse var slået til
-        if state.get("system_audio"):
+        # Systemlyd findes kun på macOS — gendan aldrig på Windows.
+        if state.get("system_audio") and sys.platform != "win32":
             self.system_audio_var.set(True)
             self._on_system_audio_toggle()
         # Auto-udfyld navn + deltagere ud fra valgt mødetype
@@ -1048,10 +1064,14 @@ class MeetingApp:
         self.device_combo.set(preferred)
 
     def _on_system_audio_toggle(self):
+        _has_sa = (getattr(self, "system_audio_status", None) is not None
+                   and self.system_audio_status.winfo_exists())
         if not self.system_audio_var.get():
-            self.system_audio_status.configure(text="")
+            if _has_sa:
+                self.system_audio_status.configure(text="")
             return
-        self.system_audio_status.configure(text="Tjekker BlackHole ...")
+        if _has_sa:
+            self.system_audio_status.configure(text="Tjekker BlackHole ...")
 
         def worker():
             idx = audio_routing.detect_blackhole()
@@ -1224,6 +1244,8 @@ class MeetingApp:
         self.hero_btn.set_transcribing()
         self.status_var.set("Transkriberer …")
         self.stop_event.set()
+        if self._mini_hud is not None and self._mini_hud.winfo_exists():
+            self._mini_hud.set_transcribing()
         # Spinner + frosset timer vises indtil worker melder 'done'
 
     def _on_close(self):
@@ -1394,6 +1416,7 @@ class MeetingApp:
                     _, out_dir, name = item
                     self.transcribing = False
                     self._set_ui_recording(False)
+                    self._hide_mini_hud()
                     self.status_var.set("Færdig.")
                     self._log(f"\n=== FÆRDIG ===\nFiler gemt i: {out_dir}")
                     messagebox.showinfo(
@@ -1408,27 +1431,36 @@ class MeetingApp:
                     _, err = item
                     self.transcribing = False
                     self._set_ui_recording(False)
+                    self._hide_mini_hud()
                     self.status_var.set("Fejl.")
                     self._log(f"\nFEJL: {err}")
                     messagebox.showerror("Fejl under optagelse", err)
                 elif kind == "system_audio_status":
                     _, idx = item
+                    _has_sa = (getattr(self, "system_audio_status", None) is not None
+                               and self.system_audio_status.winfo_exists())
                     if idx is None:
-                        self.system_audio_status.configure(
-                            text="BlackHole ikke fundet — klik 'Opsæt systemlyd'.")
+                        if _has_sa:
+                            self.system_audio_status.configure(
+                                text="BlackHole ikke fundet — klik 'Opsæt systemlyd'.")
                     else:
-                        self.system_audio_status.configure(
-                            text=f"Klar: systemlyd via BlackHole [{idx}].")
+                        if _has_sa:
+                            self.system_audio_status.configure(
+                                text=f"Klar: systemlyd via BlackHole [{idx}].")
                 elif kind == "setup_audio":
                     _, result = item
+                    _has_sa = (getattr(self, "system_audio_status", None) is not None
+                               and self.system_audio_status.winfo_exists())
                     if result.status == "ok":
                         self.system_audio_var.set(True)
-                        self.system_audio_status.configure(
-                            text=f"Klar: systemlyd via BlackHole [{result.system_device}].")
+                        if _has_sa:
+                            self.system_audio_status.configure(
+                                text=f"Klar: systemlyd via BlackHole [{result.system_device}].")
                         self._log("Systemlyd klar.")
                     else:
-                        self.system_audio_status.configure(
-                            text="Opsætning kræver handling — se loggen.")
+                        if _has_sa:
+                            self.system_audio_status.configure(
+                                text="Opsætning kræver handling — se loggen.")
                         self._log(result.guidance)
         except queue.Empty:
             pass
@@ -1462,6 +1494,9 @@ class MeetingApp:
             h, rem = divmod(elapsed, 3600)
             m, s = divmod(rem, 60)
             self.timer_var.set(f"{h:02d}:{m:02d}:{s:02d}")
+            if (self.recording and self._mini_hud is not None
+                    and self._mini_hud.winfo_exists()):
+                self._mini_hud.set_timer(self.timer_var.get())
         self.root.after(500, self._tick_timer)
 
 
@@ -2668,6 +2703,581 @@ class TranscribeFileTab:
         self.log.insert("end", msg + "\n")
         self.log.see("end")
         self.log.configure(state="disabled")
+
+
+def _bind_recursive(widget, callback):
+    """Bind <Button-1> på en widget og alle dens efterkommere.
+
+    CustomTkinter-widgets er sammensatte (en CTkLabel indeholder en intern
+    tk-label); en enkelt bind fanger ikke klik på børnene. Derfor rekursivt."""
+    try:
+        widget.bind("<Button-1>", callback)
+    except Exception:
+        pass
+    for child in widget.winfo_children():
+        _bind_recursive(child, callback)
+
+
+class MeetingWizard(ctk.CTkToplevel):
+    """Guidet 'Ny optagelse': mødeform → mødetype → navn/deltagere → motor.
+
+    Skriver til de samme variabler/metoder som MeetingApp bruger, så den fulde
+    optage-rørledning forbliver uændret. Kan springes over (luk-knap) — så
+    bevares de sidst valgte værdier fra state.json."""
+
+    STEPS = ("form", "type", "navn", "motor")
+    TITLES = ("Hvilken slags møde?", "Vælg mødetype",
+              "Navn & deltagere", "Optagemotor")
+
+    def __init__(self, app, start_step: int = 0):
+        super().__init__(app.root)
+        self.app = app
+        self.title("Ny optagelse")
+        self.configure(fg_color=_CLR["bg"])
+        self.resizable(False, False)
+        self.transient(app.root)
+        self._step = 0
+        self._type_keys = list(app._meeting_types)
+
+        W, H = 560, 600
+        self.geometry(f"{W}x{H}")
+        self.update_idletasks()
+        try:
+            px, py = app.root.winfo_x(), app.root.winfo_y()
+            pw, ph = app.root.winfo_width(), app.root.winfo_height()
+            x = px + max(0, (pw - W) // 2)
+            y = py + max(20, (ph - H) // 3)
+            self.geometry(f"{W}x{H}+{x}+{y}")
+        except Exception:
+            pass
+
+        top = ctk.CTkFrame(self, fg_color="transparent")
+        top.pack(fill="x", padx=28, pady=(24, 8))
+        self._dots = ctk.CTkLabel(
+            top, text="", font=ctk.CTkFont(size=13), text_color=_CLR["text_secondary"])
+        self._dots.pack(anchor="w")
+        self._title = ctk.CTkLabel(
+            top, text="", font=ctk.CTkFont(family="SF Pro Display", size=22, weight="bold"),
+            text_color=_CLR["text"])
+        self._title.pack(anchor="w", pady=(4, 0))
+
+        self._body = ctk.CTkFrame(self, fg_color="transparent")
+        self._body.pack(fill="both", expand=True, padx=28, pady=(8, 8))
+
+        footer = ctk.CTkFrame(self, fg_color="transparent")
+        footer.pack(fill="x", padx=28, pady=(0, 22))
+        self._back_btn = ctk.CTkButton(
+            footer, text="← Tilbage", width=110, height=40, corner_radius=10,
+            fg_color="transparent", border_width=1, border_color=_CLR["card_border"],
+            text_color=_CLR["text"], hover_color="#e0e7ff", font=ctk.CTkFont(size=14),
+            command=self._prev)
+        self._back_btn.pack(side="left")
+        self._next_btn = ctk.CTkButton(
+            footer, text="Næste →", width=170, height=40, corner_radius=10,
+            fg_color=_CLR["accent"], hover_color=_CLR["accent_hover"],
+            font=ctk.CTkFont(size=14, weight="bold"), command=self._next)
+        self._next_btn.pack(side="right")
+
+        self.go_to(max(0, min(start_step, len(self.STEPS) - 1)))
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.after(60, self._grab)
+
+    def _grab(self):
+        try:
+            self.grab_set()
+        except Exception:
+            pass
+
+    def _on_close(self):
+        # Spring over: behold nuværende/sidste valg, gå til optage-skærmen.
+        self.app._refresh_summary()
+        self.app._wizard = None
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        self.destroy()
+
+    # — Navigation -----------------------------------------------------
+    def go_to(self, step: int):
+        self._step = max(0, min(step, len(self.STEPS) - 1))
+        for w in self._body.winfo_children():
+            w.destroy()
+        builders = (self._build_form, self._build_type, self._build_navn, self._build_motor)
+        dots = "   ".join("●" if i == self._step else "○" for i in range(len(self.STEPS)))
+        self._dots.configure(text=f"{dots}     Trin {self._step + 1} af {len(self.STEPS)}")
+        self._title.configure(text=self.TITLES[self._step])
+        builders[self._step]()
+        self._back_btn.configure(state="normal" if self._step > 0 else "disabled")
+        self._next_btn.configure(
+            text="Start optagelse  ●" if self._step == len(self.STEPS) - 1 else "Næste →")
+
+    def _prev(self):
+        if self._step > 0:
+            self.go_to(self._step - 1)
+
+    def _next(self):
+        if self._step < len(self.STEPS) - 1:
+            self.go_to(self._step + 1)
+        else:
+            self._finish()
+
+    def _finish(self):
+        if not self.app.name_var.get().strip():
+            self.app.name_var.set(f"{self.app.type_var.get()} {self.app.date_var.get()}")
+        self.app._refresh_summary()
+        self.app._wizard = None
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        self.destroy()
+        self.app._toggle_recording()
+
+    # — Trin 1: Mødeform ----------------------------------------------
+    def _build_form(self):
+        wrap = ctk.CTkFrame(self._body, fg_color="transparent")
+        wrap.pack(fill="x", pady=(8, 0))
+        forms = (
+            ("fysisk", "Fysisk møde", "I lokalet — kun din mikrofon optages."),
+            ("online", "Online møde (Teams/Meet)", "Modparten optages også via systemlyd."),
+            ("telefon", "Telefonopkald", "Modparten optages også via systemlyd."),
+        )
+        self._form_cards = {}
+        for val, title, desc in forms:
+            c = ctk.CTkFrame(wrap, fg_color=_CLR["card"], corner_radius=14,
+                             border_width=2, border_color=_CLR["card_border"])
+            c.pack(fill="x", pady=6)
+            inner = ctk.CTkFrame(c, fg_color="transparent")
+            inner.pack(fill="x", padx=18, pady=14)
+            ctk.CTkLabel(inner, text=title, font=ctk.CTkFont(size=15, weight="bold"),
+                         text_color=_CLR["text"], anchor="w").pack(anchor="w")
+            ctk.CTkLabel(inner, text=desc, font=ctk.CTkFont(size=12),
+                         text_color=_CLR["text_secondary"], anchor="w",
+                         justify="left").pack(anchor="w", pady=(2, 0))
+            _bind_recursive(c, lambda e, v=val: self._select_form(v))
+            self._form_cards[val] = c
+        if sys.platform == "win32":
+            ctk.CTkLabel(
+                wrap, text="Bemærk: på Windows optages kun din mikrofon — modparten kan ikke optages.",
+                font=ctk.CTkFont(size=11), text_color=_CLR["text_secondary"],
+                anchor="w", justify="left", wraplength=480).pack(anchor="w", pady=(10, 0))
+        self._highlight_form(self.app.meeting_form_var.get())
+
+    def _select_form(self, val):
+        self.app.meeting_form_var.set(val)
+        want_system = val in ("online", "telefon") and sys.platform != "win32"
+        self.app.system_audio_var.set(want_system)
+        self.app._on_system_audio_toggle()
+        self._highlight_form(val)
+
+    def _highlight_form(self, val):
+        for v, c in self._form_cards.items():
+            c.configure(border_color=_CLR["accent"] if v == val else _CLR["card_border"])
+
+    # — Trin 2: Mødetype ----------------------------------------------
+    def _build_type(self):
+        wrap = ctk.CTkScrollableFrame(self._body, fg_color="transparent")
+        wrap.pack(fill="both", expand=True)
+        self._type_cards = {}
+        for key in self._type_keys:
+            mt = self.app._meeting_types[key]
+            bits = ["grundigt referat" if mt.get("detaljeniveau") == "grundig"
+                    else "kortfattet referat"]
+            if mt.get("opgaveliste"):
+                bits.append("opgaveliste")
+            if mt.get("citater"):
+                bits.append("citater")
+            meta = "  ·  ".join(bits)
+            c = ctk.CTkFrame(wrap, fg_color=_CLR["card"], corner_radius=14,
+                             border_width=2, border_color=_CLR["card_border"])
+            c.pack(fill="x", pady=6, padx=2)
+            inner = ctk.CTkFrame(c, fg_color="transparent")
+            inner.pack(fill="x", padx=18, pady=14)
+            ctk.CTkLabel(inner, text=mt["navn"], font=ctk.CTkFont(size=15, weight="bold"),
+                         text_color=_CLR["text"], anchor="w").pack(anchor="w")
+            if mt.get("fokus"):
+                ctk.CTkLabel(inner, text=mt["fokus"], font=ctk.CTkFont(size=12),
+                             text_color=_CLR["text_secondary"], anchor="w",
+                             justify="left", wraplength=430).pack(anchor="w", pady=(2, 0))
+            ctk.CTkLabel(inner, text=meta, font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=_CLR["accent"], anchor="w").pack(anchor="w", pady=(6, 0))
+            _bind_recursive(c, lambda e, k=key: self._select_type(k))
+            self._type_cards[key] = c
+        self._highlight_type(self.app._type_key)
+
+    def _select_type(self, key):
+        self.app._type_key = key
+        self.app.type_var.set(self.app._meeting_types[key]["navn"])
+        self.app._on_type_selected(self.app._meeting_types[key]["navn"])
+        self._highlight_type(key)
+
+    def _highlight_type(self, key):
+        for k, c in self._type_cards.items():
+            c.configure(border_color=_CLR["accent"] if k == key else _CLR["card_border"])
+
+    # — Trin 3: Navn & deltagere --------------------------------------
+    def _build_navn(self):
+        wrap = ctk.CTkFrame(self._body, fg_color="transparent")
+        wrap.pack(fill="x", pady=(8, 0))
+        MeetingApp._field_label(wrap, "Mødenavn")
+        ctk.CTkEntry(wrap, textvariable=self.app.name_var, height=38, corner_radius=10,
+                     border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
+                     text_color=_CLR["text"], font=ctk.CTkFont(size=14)).pack(fill="x", pady=(0, 12))
+        row = ctk.CTkFrame(wrap, fg_color="transparent")
+        row.pack(fill="x", pady=(0, 12))
+        row.columnconfigure(0, weight=1)
+        row.columnconfigure(1, weight=2)
+        df = ctk.CTkFrame(row, fg_color="transparent")
+        df.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        MeetingApp._field_label(df, "Dato")
+        ctk.CTkEntry(df, textvariable=self.app.date_var, height=38, corner_radius=10,
+                     border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
+                     text_color=_CLR["text"], font=ctk.CTkFont(size=14)).pack(fill="x")
+        af = ctk.CTkFrame(row, fg_color="transparent")
+        af.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        MeetingApp._field_label(af, "Deltagere (komma-adskilt)")
+        ctk.CTkEntry(af, textvariable=self.app.attendees_var, height=38, corner_radius=10,
+                     border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
+                     text_color=_CLR["text"], font=ctk.CTkFont(size=14)).pack(fill="x")
+        ctk.CTkLabel(wrap, text="Navnet bruges som mappenavn for mødet.",
+                     font=ctk.CTkFont(size=11), text_color=_CLR["text_secondary"],
+                     anchor="w").pack(anchor="w")
+
+    # — Trin 4: Optagemotor -------------------------------------------
+    def _build_motor(self):
+        wrap = ctk.CTkFrame(self._body, fg_color="transparent")
+        wrap.pack(fill="x", pady=(8, 0))
+        opts = (
+            ("hviske", "Hviske — lokal & offline",
+             "Kører live på din computer under mødet. Ingen internet eller nøgle nødvendig."),
+            ("gemini", "Gemini — cloud, bedst til dansk",
+             "Kører efter mødet. Bedst til danske navne og fagtermer. Kræver en API-nøgle."),
+        )
+        self._motor_cards = {}
+        for val, title, desc in opts:
+            c = ctk.CTkFrame(wrap, fg_color=_CLR["card"], corner_radius=14,
+                             border_width=2, border_color=_CLR["card_border"])
+            c.pack(fill="x", pady=6)
+            inner = ctk.CTkFrame(c, fg_color="transparent")
+            inner.pack(fill="x", padx=18, pady=14)
+            ctk.CTkLabel(inner, text=title, font=ctk.CTkFont(size=15, weight="bold"),
+                         text_color=_CLR["text"], anchor="w").pack(anchor="w")
+            ctk.CTkLabel(inner, text=desc, font=ctk.CTkFont(size=12),
+                         text_color=_CLR["text_secondary"], anchor="w",
+                         justify="left", wraplength=440).pack(anchor="w", pady=(2, 0))
+            _bind_recursive(c, lambda e, v=val: self._select_motor(v))
+            self._motor_cards[val] = c
+        self._motor_hint = ctk.CTkLabel(
+            wrap, text="", font=ctk.CTkFont(size=11), text_color="#b45309",
+            anchor="w", justify="left", wraplength=480)
+        self._motor_hint.pack(fill="x", pady=(8, 0))
+        self._highlight_motor(self.app.engine_var.get())
+
+    def _select_motor(self, val):
+        self.app._select_engine(val)
+        self._highlight_motor(val)
+
+    def _highlight_motor(self, val):
+        for v, c in self._motor_cards.items():
+            c.configure(border_color=_CLR["accent"] if v == val else _CLR["card_border"])
+        no_key = not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+        if val == "gemini" and no_key:
+            self._motor_hint.configure(
+                text="OBS  ·  Ingen Gemini-nøgle fundet. Tilføj den under Indstillinger før du bruger Gemini.")
+        else:
+            self._motor_hint.configure(text="")
+
+    def sync_engine(self):
+        if getattr(self, "_motor_cards", None):
+            self._highlight_motor(self.app.engine_var.get())
+
+
+class MiniHUD(ctk.CTkToplevel):
+    """Lille, ramme-løst, altid-øverst HUD der vises når hovedvinduet minimeres
+    mens der optages/transkriberes. Viser løbende timer + Stop + 'åbn vindue'.
+
+    Ren Tkinter (overrideredirect + -topmost) — ingen ekstra afhængigheder, så
+    den virker på både macOS og Windows uden libs som rumps/pystray."""
+
+    def __init__(self, app):
+        super().__init__(app.root)
+        self.app = app
+        self.overrideredirect(True)
+        try:
+            self.attributes("-topmost", True)
+        except Exception:
+            pass
+        try:
+            self.attributes("-alpha", 0.98)
+        except Exception:
+            pass
+        self.configure(fg_color=_CLR["bg"])
+        self._mode = "recording"
+        self._spin_chars = ["◐", "◓", "◑", "◒"]
+        self._tick = 0
+        self._anim_after = None
+        self._drag = (0, 0)
+
+        pill = ctk.CTkFrame(self, fg_color=_CLR["card"], corner_radius=18,
+                            border_width=1, border_color=_CLR["card_border"])
+        pill.pack(fill="both", expand=True, padx=2, pady=2)
+        inner = ctk.CTkFrame(pill, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=14, pady=10)
+
+        self._icon = ctk.CTkLabel(inner, text="●", width=18,
+                                  font=ctk.CTkFont(size=18), text_color=_CLR["rec_active"])
+        self._icon.pack(side="left", padx=(0, 10))
+
+        mid = ctk.CTkFrame(inner, fg_color="transparent")
+        mid.pack(side="left", fill="x", expand=True)
+        self._caption = ctk.CTkLabel(mid, text="OPTAGER", anchor="w",
+            font=ctk.CTkFont(size=10, weight="bold"), text_color=_CLR["rec_active"])
+        self._caption.pack(anchor="w")
+        self._timer = ctk.CTkLabel(mid, text="00:00:00", anchor="w",
+            font=ctk.CTkFont(family="SF Mono", size=19, weight="bold"), text_color=_CLR["text"])
+        self._timer.pack(anchor="w")
+        self._name = ctk.CTkLabel(mid, text="", anchor="w",
+            font=ctk.CTkFont(size=11), text_color=_CLR["text_secondary"])
+        self._name.pack(anchor="w")
+
+        self._stop_btn = ctk.CTkButton(
+            inner, text="■", width=40, height=40, corner_radius=12,
+            font=ctk.CTkFont(size=14, weight="bold"), fg_color=_CLR["rec_active"],
+            hover_color="#b91c1c", text_color="#ffffff",
+            command=self.app._stop_recording)
+        self._stop_btn.pack(side="right", padx=(8, 0))
+        ctk.CTkButton(
+            inner, text="⤢", width=40, height=40, corner_radius=12,
+            font=ctk.CTkFont(size=16), fg_color="transparent", border_width=1,
+            border_color=_CLR["card_border"], text_color=_CLR["text"],
+            hover_color="#e0e7ff", command=self.app._restore_from_hud).pack(side="right")
+
+        # Træk hvor som helst på pillen for at flytte HUD'en.
+        for w in (pill, inner, mid, self._caption, self._timer, self._name, self._icon):
+            w.bind("<Button-1>", self._start_drag)
+            w.bind("<B1-Motion>", self._on_drag)
+
+        self.update_idletasks()
+        w = max(300, self.winfo_reqwidth())
+        h = self.winfo_reqheight()
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        self.geometry(f"{w}x{h}+{sw - w - 28}+{sh - h - 80}")
+        self._tick_anim()
+
+    def _start_drag(self, e):
+        self._drag = (e.x_root - self.winfo_x(), e.y_root - self.winfo_y())
+
+    def _on_drag(self, e):
+        self.geometry(f"+{e.x_root - self._drag[0]}+{e.y_root - self._drag[1]}")
+
+    def _tick_anim(self):
+        if self._mode == "recording":
+            self._icon.configure(
+                text="●",
+                text_color=_CLR["rec_active"] if self._tick % 2 == 0 else _CLR["rec_ring"])
+            self._tick += 1
+            self._anim_after = self.after(650, self._tick_anim)
+        else:
+            self._icon.configure(
+                text=self._spin_chars[self._tick % len(self._spin_chars)],
+                text_color=_CLR["accent"])
+            self._tick += 1
+            self._anim_after = self.after(160, self._tick_anim)
+
+    def set_timer(self, text):
+        self._timer.configure(text=text)
+
+    def set_meeting(self, text):
+        self._name.configure(text=text)
+
+    def set_recording(self):
+        self._mode = "recording"
+        self._caption.configure(text="OPTAGER", text_color=_CLR["rec_active"])
+        self._stop_btn.configure(state="normal")
+
+    def set_transcribing(self):
+        self._mode = "transcribing"
+        self._caption.configure(text="TRANSKRIBERER", text_color=_CLR["accent"])
+        self._timer.configure(text="Gør færdig…")
+        self._stop_btn.configure(state="disabled")
+
+    def destroy(self):
+        if self._anim_after is not None:
+            try:
+                self.after_cancel(self._anim_after)
+            except Exception:
+                pass
+        super().destroy()
+
+
+def _open_path(path):
+    """Åbn en fil eller mappe i systemets standard-program (kryds-platform)."""
+    if path is None:
+        return
+    p = str(path)
+    try:
+        if sys.platform == "win32":
+            os.startfile(p)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", p])
+        else:
+            subprocess.Popen(["xdg-open", p])
+    except Exception as e:
+        print(f"Kunne ikke åbne {p}: {e}", file=sys.stderr)
+
+
+class HistorikTab:
+    """Historik-fane: lister tidligere møder (undermapper i mødemappen) og giver
+    hurtige handlinger — åbn mappe, åbn referat, kopiér referat. Læser kun fra
+    disken; rører ikke ved optagelses-/transkriptions-logikken."""
+
+    def __init__(self, parent, app):
+        self.parent = parent
+        self.app = app
+        self._build_ui()
+        self.refresh()
+
+    def _base_dir(self):
+        try:
+            base = Path(self.app.folder_var.get().strip())
+            if base.exists():
+                return base
+        except Exception:
+            pass
+        return MEETINGS_DIR
+
+    def _build_ui(self):
+        self.parent.configure(fg_color=_CLR["bg"])
+        self._outer = ctk.CTkScrollableFrame(
+            self.parent, fg_color=_CLR["bg"],
+            scrollbar_button_color=_CLR["card_border"],
+            scrollbar_button_hover_color=_CLR["accent"])
+        self._outer.pack(fill="both", expand=True)
+
+        head = ctk.CTkFrame(self._outer, fg_color="transparent")
+        head.pack(fill="x", padx=28, pady=(24, 2))
+        ctk.CTkLabel(
+            head, text="Historik",
+            font=ctk.CTkFont(family="SF Pro Display", size=28, weight="bold"),
+            text_color=_CLR["text"]).pack(side="left")
+        ctk.CTkButton(
+            head, text="Opdater", width=90, height=32, corner_radius=10,
+            fg_color="transparent", border_width=1, border_color=_CLR["card_border"],
+            text_color=_CLR["text"], hover_color="#e0e7ff",
+            command=self.refresh).pack(side="right")
+        ctk.CTkLabel(
+            self._outer, text="Tidligere møder i din mødemappe — åbn eller kopiér referatet.",
+            font=ctk.CTkFont(size=13), text_color=_CLR["text_secondary"]).pack(
+            anchor="w", padx=28, pady=(0, 6))
+
+        self._list = ctk.CTkFrame(self._outer, fg_color="transparent")
+        self._list.pack(fill="both", expand=True, padx=24, pady=(8, 24))
+
+    def refresh(self):
+        for w in self._list.winfo_children():
+            w.destroy()
+        base = self._base_dir()
+        meetings = []
+        try:
+            for d in base.iterdir():
+                if d.is_dir():
+                    meetings.append(d)
+        except Exception:
+            meetings = []
+        meetings.sort(
+            key=lambda p: (p.stat().st_mtime if p.exists() else 0), reverse=True)
+        if not meetings:
+            ctk.CTkLabel(
+                self._list,
+                text="Ingen møder fundet endnu.\nOptag dit første møde fra Optag-fanen.",
+                font=ctk.CTkFont(size=14), text_color=_CLR["text_secondary"],
+                justify="left").pack(anchor="w", padx=6, pady=30)
+            return
+        for d in meetings[:60]:
+            self._meeting_card(d)
+
+    def _find(self, folder, prefix=None, suffix=None):
+        try:
+            for f in folder.iterdir():
+                if not f.is_file():
+                    continue
+                n = f.name
+                if suffix and not n.lower().endswith(suffix):
+                    continue
+                if prefix and not n.startswith(prefix):
+                    continue
+                return f
+        except Exception:
+            pass
+        return None
+
+    def _meeting_card(self, folder):
+        referat = self._find(folder, prefix="Referat ", suffix=".md")
+        wav = self._find(folder, suffix=".wav")
+        try:
+            import datetime as _dt
+            mtime = _dt.datetime.fromtimestamp(
+                folder.stat().st_mtime).strftime("%d-%m-%Y · %H:%M")
+        except Exception:
+            mtime = ""
+
+        card = ctk.CTkFrame(
+            self._list, fg_color=_CLR["card"], corner_radius=14,
+            border_width=1, border_color=_CLR["card_border"])
+        card.pack(fill="x", pady=6)
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(fill="x", padx=18, pady=14)
+
+        top = ctk.CTkFrame(inner, fg_color="transparent")
+        top.pack(fill="x")
+        ctk.CTkLabel(
+            top, text=folder.name, anchor="w",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color=_CLR["text"]).pack(side="left")
+        ctk.CTkLabel(
+            top, text=("Referat ✓" if referat else "Intet referat"), anchor="e",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=(_CLR["success"] if referat else _CLR["text_secondary"])).pack(side="right")
+        ctk.CTkLabel(
+            inner, text=mtime, anchor="w", font=ctk.CTkFont(size=11),
+            text_color=_CLR["text_secondary"]).pack(anchor="w", pady=(2, 8))
+
+        btns = ctk.CTkFrame(inner, fg_color="transparent")
+        btns.pack(fill="x")
+
+        def mkbtn(text, cmd, primary=False, enabled=True):
+            b = ctk.CTkButton(
+                btns, text=text, height=30, corner_radius=9,
+                font=ctk.CTkFont(size=12),
+                fg_color=(_CLR["accent"] if primary else "transparent"),
+                border_width=(0 if primary else 1), border_color=_CLR["card_border"],
+                text_color=("#ffffff" if primary else _CLR["text"]),
+                hover_color=(_CLR["accent_hover"] if primary else "#e0e7ff"),
+                command=cmd)
+            if not enabled:
+                b.configure(state="disabled", text_color=_CLR["text_secondary"])
+            b.pack(side="left", padx=(0, 8))
+            return b
+
+        mkbtn("Åbn mappe", lambda f=folder: _open_path(f))
+        mkbtn("Åbn referat",
+              (lambda r=referat: _open_path(r)) if referat else (lambda: None),
+              primary=bool(referat), enabled=bool(referat))
+        mkbtn("Kopiér referat",
+              (lambda r=referat: self._copy(r)) if referat else (lambda: None),
+              enabled=bool(referat))
+
+    def _copy(self, path):
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+            self.app.root.clipboard_clear()
+            self.app.root.clipboard_append(text)
+            self.app.root.update()
+            self.app.status_var.set("Referat kopieret til udklipsholder.")
+        except Exception as e:
+            self.app.status_var.set(f"Kunne ikke kopiere referat: {e}")
 
 
 def _first_run_setup(root: ctk.CTk) -> None:
