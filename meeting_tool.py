@@ -16,8 +16,8 @@ Brug:
 
 Kraever:
     - ffmpeg installeret
-    - ANTHROPIC_API_KEY miljoevariabel sat (til referat)
-    - Python-pakker: faster-whisper, anthropic
+    - GEMINI_API_KEY miljoevariabel sat (til Gemini-transkription og referat)
+    - Python-pakker: faster-whisper, google-genai
 """
 
 import argparse
@@ -1820,7 +1820,7 @@ def transcribe_with_gemini(
 
 
 # ---------------------------------------------------------------------------
-# 4. Referat og opgaver via Claude API
+# 4. Referat og opgaver via Gemini API
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """\
@@ -1903,51 +1903,7 @@ Generer venligst et komplet referat og opgaveliste.
 """
 
 
-CLAUDE_MINUTES_MODEL = "claude-opus-4-7"
-
-
-def _anthropic_client():
-    """Anthropic-klient. ANTHROPIC_BASE_URL sat → Vercel AI Gateway (budgetloft
-    + revoke pr. nøgle); ellers direkte (macOS-flow uændret)."""
-    import anthropic
-    base_url = os.environ.get("ANTHROPIC_BASE_URL")
-    if base_url:
-        token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
-        return anthropic.Anthropic(base_url=base_url, api_key=token)
-    return anthropic.Anthropic()
-
-
-def _friendly_anthropic_error(status_code: int) -> str | None:
-    """Dansk besked for kendte Gateway-fejl, ellers None (lad fejlen boble op)."""
-    if status_code == 402:
-        return ("Claude-budgettet for din nøgle er opbrugt. "
-                "Kontakt din administrator for at hæve loftet.")
-    if status_code == 429:
-        return "For mange forespørgsler lige nu — vent et øjeblik og prøv igen."
-    return None
-
-
-# Vercel AI Gateway kræver 'anthropic/'-præfikset slug med punktummer
-# (jf. https://vercel.com/docs/ai-gateway/sdks-and-apis/anthropic-messages-api),
-# ikke det direkte Anthropic-slug. Overstyr med CLAUDE_GATEWAY_MODEL ved behov.
-CLAUDE_GATEWAY_MODEL_DEFAULT = "anthropic/claude-opus-4.7"
-
-
-def _claude_model() -> str:
-    """Model-slug til Claude. Via Vercel AI Gateway bruges gateway-slug'en
-    (CLAUDE_GATEWAY_MODEL eller default'en); direkte (macOS) bruges standard-
-    slug'en."""
-    if os.environ.get("ANTHROPIC_BASE_URL"):
-        return os.environ.get("CLAUDE_GATEWAY_MODEL") or CLAUDE_GATEWAY_MODEL_DEFAULT
-    return CLAUDE_MINUTES_MODEL
-
-
-def _claude_request_extra() -> dict:
-    """Ekstra kwargs til messages.create. MT_USER (sat i setup-dialogen) sendes
-    som metadata.user_id, så Vercel-dashboardet kan vise forbrug pr. kollega —
-    det er den 'brugerstyring' der gør per-person-budget/-overvågning mulig."""
-    user_id = os.environ.get("MT_USER")
-    return {"metadata": {"user_id": user_id}} if user_id else {}
+GEMINI_MINUTES_MODEL = "gemini-2.5-pro"
 
 
 def generate_minutes(
@@ -1956,48 +1912,52 @@ def generate_minutes(
     date: str,
     meeting_type: dict | None = None,
 ) -> str:
-    """Genererer referat og opgaver via Claude API.
+    """Genererer referat og opgaver via Gemini API.
 
     meeting_type: en (normaliseret) mødetype-dict. None → driftledelse-fallback.
     """
-    import anthropic
+    from google import genai
+    from google.genai import types
 
     if meeting_type is None:
         _types = load_meeting_types(CONFIG_DIR)
         meeting_type = _types.get("driftledelse") or next(iter(_types.values()))
     meeting_type = _normalize_meeting_type(meeting_type)
 
-    print(f"Genererer referat og opgaver med Claude ({CLAUDE_MINUTES_MODEL}) ...", flush=True)
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY ikke sat. Indsæt din Gemini-nøgle i indstillingerne "
+            "eller i .env."
+        )
 
-    client = _anthropic_client()
+    model = os.environ.get("GEMINI_MINUTES_MODEL") or GEMINI_MINUTES_MODEL
+    print(f"Genererer referat og opgaver med Gemini ({model}) ...", flush=True)
+
+    client = genai.Client(api_key=api_key)
 
     attendees_str = ", ".join(attendees)
     vocab = load_vocabulary(CONFIG_DIR)
     system = SYSTEM_PROMPT.format(
         meeting_type_name=meeting_type["navn"],
         attendees=attendees_str,
-        vocabulary_section=format_vocabulary_for_claude(vocab),
+        vocabulary_section=format_vocabulary_for_minutes(vocab),
         meeting_type_section=compose_type_section(meeting_type),
     )
     user_msg = USER_PROMPT.format(
         date=date, transcript=transcript, meeting_type_name=meeting_type["navn"]
     )
 
-    try:
-        response = client.messages.create(
-            model=_claude_model(),
-            max_tokens=16000,
-            system=system,
-            messages=[{"role": "user", "content": user_msg}],
-            **_claude_request_extra(),
-        )
-    except anthropic.APIStatusError as e:
-        friendly = _friendly_anthropic_error(getattr(e, "status_code", 0))
-        if friendly:
-            raise RuntimeError(friendly) from e
-        raise
-
-    return response.content[0].text
+    response = client.models.generate_content(
+        model=model,
+        contents=[user_msg],
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=0.2,
+            max_output_tokens=32000,
+        ),
+    )
+    return response.text
 
 
 # ---------------------------------------------------------------------------
@@ -2743,8 +2703,8 @@ _CAT_HEADERS = {
 }
 
 
-def format_vocabulary_for_claude(vocab: dict[str, list[str]]) -> str:
-    """Formaterer vocab som markdown-sektion til Claude SYSTEM_PROMPT.
+def format_vocabulary_for_minutes(vocab: dict[str, list[str]]) -> str:
+    """Formaterer vocab som markdown-sektion til referat-SYSTEM_PROMPT.
 
     Tomme kategorier udelades. Hvis alle tre er tomme returneres en
     placeholder-linje så prompten ikke får et hul.
@@ -2774,7 +2734,7 @@ def format_vocabulary_for_claude(vocab: dict[str, list[str]]) -> str:
 def format_vocabulary_for_gemini(vocab: dict[str, list[str]]) -> str:
     """Formaterer vocab som markdown-sektion til Gemini SYSTEM_INSTRUCTION.
 
-    Formatet matcher Claude-versionen i struktur, men med en
+    Formatet matcher referat-versionen i struktur, men med en
     transkriptions-orienteret indledning (bias akustisk genkendelse).
     """
     has_any = any(vocab.get(cat) for cat in VOCAB_CATEGORIES)

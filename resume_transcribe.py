@@ -79,7 +79,7 @@ def main():
     print(f"Transkription gemt: {transcript_file}", flush=True)
 
     print("", flush=True)
-    print(f"=== Trin 2/2: Referat ({meeting_tool.CLAUDE_MINUTES_MODEL}) ===", flush=True)
+    print("=== Trin 2/2: Referat (Gemini) ===", flush=True)
     minutes = meeting_tool.generate_minutes(transcript, attendees, date)
 
     minutes_file = output_dir / f"Referat {name_base}.md"
