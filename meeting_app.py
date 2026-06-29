@@ -841,10 +841,15 @@ class MeetingApp:
             hud.attributes("-topmost", True)
         except Exception:
             pass
+        # Genstart animationsløkken hvis den var sat på pause via withdraw().
+        hud.resume_anim()
 
     def _hide_mini_hud(self):
         if self._mini_hud is not None and self._mini_hud.winfo_exists():
             try:
+                # Sæt animationen på pause inden withdraw — undgår spildte
+                # after-kald mens HUD'en er skjult (se MiniHUD.pause_anim).
+                self._mini_hud.pause_anim()
                 self._mini_hud.withdraw()
             except Exception:
                 pass
@@ -885,6 +890,22 @@ class MeetingApp:
         return "break"
 
     def _on_escape_key(self, event=None):
+        # Ignorer Escape i tekstfelter og når en dialog/guide har grabbbet fokus.
+        w = self.root.focus_get()
+        try:
+            cls = w.winfo_class() if w is not None else ""
+        except Exception:
+            cls = ""
+        if cls in ("Entry", "TEntry", "Text"):
+            return
+        try:
+            if self.root.grab_current() not in (None, self.root):
+                return
+        except Exception:
+            pass
+        # Minimer kun fra Optag-fanen, og kun mens der optages/transkriberes.
+        if self._tabview.get() != "Optag":
+            return
         if self.recording or self.transcribing:
             try:
                 self.root.iconify()
@@ -994,15 +1015,12 @@ class MeetingApp:
 
         Kaldes når en type oprettes/redigeres/slettes i Mødetyper-fanen. Bevarer
         markeringen hvis den stadig findes; ellers falder den tilbage til første
-        type. type_combo findes kun mens guiden er åben — derfor vagten."""
+        type. Typevalg sker via klikbare kort i guiden, der genopbygges ved hvert
+        go_to — de henter altid friske værdier fra self._meeting_types."""
         self._meeting_types = meeting_tool.load_meeting_types(CONFIG_DIR)
         self._type_keys = list(self._meeting_types)
         if self._type_key not in self._meeting_types:
             self._type_key = self._type_keys[0]
-        labels = [self._meeting_types[k]["navn"] for k in self._type_keys]
-        if (getattr(self, "type_combo", None) is not None
-                and self.type_combo.winfo_exists()):
-            self.type_combo.configure(values=labels)
         self.type_var.set(self._meeting_types[self._type_key]["navn"])
 
     def _on_meeting_types_changed(self):
@@ -3092,6 +3110,20 @@ class MiniHUD(ctk.CTkToplevel):
     def set_meeting(self, text):
         self._name.configure(text=text)
 
+    def pause_anim(self):
+        """Afbryd animationsløkken (bruges ved withdraw — ingen spildte wakeups)."""
+        if self._anim_after is not None:
+            try:
+                self.after_cancel(self._anim_after)
+            except Exception:
+                pass
+            self._anim_after = None
+
+    def resume_anim(self):
+        """Genstart animationsløkken efter deiconify, hvis den ikke allerede kører."""
+        if self._anim_after is None:
+            self._tick_anim()
+
     def set_recording(self):
         self._mode = "recording"
         self._caption.configure(text="OPTAGER", text_color=_CLR["rec_active"])
@@ -3112,8 +3144,11 @@ class MiniHUD(ctk.CTkToplevel):
         super().destroy()
 
 
-def _open_path(path):
-    """Åbn en fil eller mappe i systemets standard-program (kryds-platform)."""
+def _open_path(path, on_error=None):
+    """Åbn en fil eller mappe i systemets standard-program (kryds-platform).
+
+    on_error: valgfri callable(str) der modtager fejlbeskeden — brug den til
+    at vise fejl i UI'et (f.eks. status_var.set). Fallback til stderr."""
     if path is None:
         return
     p = str(path)
@@ -3125,7 +3160,11 @@ def _open_path(path):
         else:
             subprocess.Popen(["xdg-open", p])
     except Exception as e:
-        print(f"Kunne ikke åbne {p}: {e}", file=sys.stderr)
+        msg = f"Kunne ikke åbne {p}: {e}"
+        if on_error is not None:
+            on_error(msg)
+        else:
+            print(msg, file=sys.stderr)
 
 
 class HistorikTab:
@@ -3187,7 +3226,7 @@ class HistorikTab:
         except Exception:
             meetings = []
         meetings.sort(
-            key=lambda p: (p.stat().st_mtime if p.exists() else 0), reverse=True)
+            key=lambda p: (p.stat().st_mtime if p.is_dir() else 0), reverse=True)
         if not meetings:
             ctk.CTkLabel(
                 self._list,
@@ -3217,8 +3256,7 @@ class HistorikTab:
         referat = self._find(folder, prefix="Referat ", suffix=".md")
         wav = self._find(folder, suffix=".wav")
         try:
-            import datetime as _dt
-            mtime = _dt.datetime.fromtimestamp(
+            mtime = datetime.fromtimestamp(
                 folder.stat().st_mtime).strftime("%d-%m-%Y · %H:%M")
         except Exception:
             mtime = ""
@@ -3261,12 +3299,13 @@ class HistorikTab:
             b.pack(side="left", padx=(0, 8))
             return b
 
-        mkbtn("Åbn mappe", lambda f=folder: _open_path(f))
+        _err = self.app.status_var.set
+        mkbtn("Åbn mappe", lambda f=folder: _open_path(f, on_error=_err))
         mkbtn("Åbn referat",
-              (lambda r=referat: _open_path(r)) if referat else (lambda: None),
+              (lambda r=referat: _open_path(r, on_error=_err)) if referat else None,
               primary=bool(referat), enabled=bool(referat))
         mkbtn("Kopiér referat",
-              (lambda r=referat: self._copy(r)) if referat else (lambda: None),
+              (lambda r=referat: self._copy(r)) if referat else None,
               enabled=bool(referat))
 
     def _copy(self, path):
