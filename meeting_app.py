@@ -725,7 +725,7 @@ class MeetingApp:
         self.minutes_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             self._settings_inner,
-            text="Generer referat med Claude efter optagelse",
+            text="Generer referat efter optagelse",
             variable=self.minutes_var,
             font=ctk.CTkFont(size=13),
             text_color=_CLR["text"],
@@ -1267,7 +1267,7 @@ class MeetingApp:
 
             minutes = None
             if gen_minutes and transcript.strip():
-                self._ui_status("Genererer referat med Claude ...")
+                self._ui_status("Genererer referat ...")
                 try:
                     minutes = meeting_tool.generate_minutes(
                         transcript, attendees, date, meeting_type=meeting_type
@@ -1447,7 +1447,7 @@ class VocabularyTab:
 
         ctk.CTkLabel(
             outer,
-            text="Navne og termer som bruges i Claude/Gemini/Hviske-prompts",
+            text="Navne og termer som bruges i Gemini/Hviske-prompts",
             font=ctk.CTkFont(family="SF Pro Text", size=14),
             text_color=_CLR["text_secondary"],
         ).pack(anchor="w", padx=28, pady=(0, 16))
@@ -2232,7 +2232,7 @@ class TranscribeFileTab:
         self.minutes_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             inner,
-            text="Generer referat med Claude bagefter",
+            text="Generer referat bagefter",
             variable=self.minutes_var,
             font=ctk.CTkFont(size=13),
             text_color=_CLR["text"],
