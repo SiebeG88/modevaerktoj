@@ -33,6 +33,7 @@ import sys
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 
@@ -460,6 +461,43 @@ def record_meeting(output_path: Path, device_id: int | str = 1) -> Path:
     else:
         print("Fejl: Optagelsen blev ikke gemt.")
         sys.exit(1)
+
+
+@dataclass
+class DualTrackResult:
+    """Resultat af to-spors-optagelse: status, faktiske starttider (epoch) og varigheder."""
+    sys_ok: bool
+    mic_start: float
+    sys_start: float
+    mic_duration: float
+    sys_duration: float
+
+
+def _resolve_sync(stamps, mic_path: Path, sys_path: Path, sys_ok: bool,
+                  *, now: float, duration_fn) -> "DualTrackResult":
+    """Udled DualTrackResult fra start-stempler med sikre fallbacks.
+
+    `stamps` er {"mic": float|None, "sys": float|None}. Manglende mic-stempel →
+    `now`; manglende sys-stempel → mic_start. `duration_fn(path)->float` er
+    injicerbar (i produktion `_ffprobe_duration`)."""
+    mic_start = stamps.get("mic") if stamps.get("mic") is not None else now
+    sys_start = stamps.get("sys") if stamps.get("sys") is not None else mic_start
+    mic_duration = duration_fn(mic_path) if mic_path.exists() else 0.0
+    sys_final = bool(sys_ok and sys_path.exists() and sys_path.stat().st_size > 0)
+    sys_duration = duration_fn(sys_path) if sys_final else 0.0
+    return DualTrackResult(sys_final, mic_start, sys_start, mic_duration, sys_duration)
+
+
+def _write_sync_sidecar(path: Path, result: "DualTrackResult") -> None:
+    """Skriv sync-metadata som JSON ved siden af WAV-filerne."""
+    import json
+    path.write_text(json.dumps({
+        "version": 1,
+        "mic_start": result.mic_start,
+        "sys_start": result.sys_start,
+        "mic_duration": result.mic_duration,
+        "sys_duration": result.sys_duration,
+    }), encoding="utf-8")
 
 
 def _record_dual_tracks(
