@@ -34,3 +34,18 @@ htmlcov/
 # CoreAudio-hjælper (kompileret binær og runtime-state)
 .audio_helper
 .audio_output_state.json
+
+# Python venv
+.venv/
+venv/
+
+# PyInstaller-output
+build/
+dist/
+
+# Bundlede ffmpeg/ffprobe (CI henter dem fra gyan.dev før build)
+ffmpeg.exe
+ffprobe.exe
+
+# Inno Setup-output
+installer_out/
