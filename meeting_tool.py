@@ -507,24 +507,29 @@ def _record_dual_tracks(
     sys_device: int,  # historisk parameter (BlackHole-index); ignoreret nu — AudioTee bruges
     stop_event: threading.Event | None,
     on_status,
-) -> bool:
+) -> "DualTrackResult":
     """Optag mikrofon + systemlyd til hver sin WAV.
 
     Mikrofon: ffmpeg/avfoundation som før.
     Systemlyd: AudioTee (Core Audio Tap API, macOS 14.2+) piper rå s16le PCM
-    til en parallel ffmpeg-proces der pakker det som WAV. Ingen BlackHole eller
-    Multi-Output-routing nødvendig.
+    til en pump-tråd der videresender til en parallel ffmpeg-proces der pakker
+    det som WAV. Ingen BlackHole eller Multi-Output-routing nødvendig.
 
-    Returnerer True hvis begge spor blev optaget; ved fejl på systemsporet
-    degraderes til mic-kun (returnerer False, og kun mic_path er gyldig).
+    Returnerer et DualTrackResult med synkroniseringsinformation og skriver
+    desuden et <navn>.sync.json-sidecar ved siden af mic_path.
 
-    De to spor kan starte med få ms forskel; det håndteres af tidsstempel-
-    fletningen i merge_tracks, så sample-præcis sync er ikke nødvendig.
+    Ved fejl på systemsporet degraderes til mic-kun (DualTrackResult.sys_ok=False).
+
+    De to spor kan starte med få ms forskel; det håndteres via tidsstempler i
+    DualTrackResult, så sample-præcis sync er ikke nødvendig her.
     """
     del sys_device  # bagudkompatibilitet — AudioTee tap'per systemlyd direkte
 
     def _status(msg):
         (on_status or print)(msg)
+
+    stamps: dict[str, float | None] = {"mic": None, "sys": None}
+    capture_stop = threading.Event()
 
     # --- Mikrofon-spor: ffmpeg/avfoundation ---
     mic_cmd = [
@@ -534,10 +539,24 @@ def _record_dual_tracks(
     ]
     mic_proc = subprocess.Popen(mic_cmd, stdin=subprocess.PIPE)
 
-    # --- Systemlyd-spor: AudioTee → ffmpeg pipe → WAV ---
+    # Poll-tråd: stempl mic-start når filen vokser forbi WAV-headeren (>1 KB).
+    def _poll_mic_start():
+        while not capture_stop.is_set():
+            try:
+                if mic_path.stat().st_size > 1024:
+                    stamps["mic"] = time.time()
+                    return
+            except OSError:
+                pass
+            capture_stop.wait(0.05)
+    mic_poll_thread = threading.Thread(target=_poll_mic_start, daemon=True)
+    mic_poll_thread.start()
+
+    # --- Systemlyd-spor: AudioTee → (pump-tråd) → ffmpeg pipe → WAV ---
     sys_ok = True
     audiotee_proc: subprocess.Popen | None = None
     sys_ffmpeg_proc: subprocess.Popen | None = None
+    sys_pump_thread: threading.Thread | None = None
     if not AUDIOTEE_BIN.exists():
         _status(
             f"AudioTee-binær mangler ({AUDIOTEE_BIN.name}) — "
@@ -549,7 +568,7 @@ def _record_dual_tracks(
             audiotee_proc = subprocess.Popen(
                 [str(AUDIOTEE_BIN), "--sample-rate", "16000"],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,  # AudioTee logger debug til stderr; drop det
+                stderr=subprocess.DEVNULL,
             )
             sys_ffmpeg_proc = subprocess.Popen(
                 [
@@ -559,16 +578,35 @@ def _record_dual_tracks(
                     "-c:a", "copy",
                     str(sys_path), "-y", "-loglevel", "warning",
                 ],
-                stdin=audiotee_proc.stdout,
+                stdin=subprocess.PIPE,
             )
-            # Luk vores reference til pipen så AudioTee's EOF når ffmpeg.
-            audiotee_proc.stdout.close()
+
+            def _pump_sys():
+                first = True
+                try:
+                    while True:
+                        data = audiotee_proc.stdout.read(4096)
+                        if not data:
+                            break
+                        if first:
+                            stamps["sys"] = time.time()
+                            first = False
+                        try:
+                            sys_ffmpeg_proc.stdin.write(data)
+                        except (BrokenPipeError, ValueError):
+                            break
+                finally:
+                    try:
+                        sys_ffmpeg_proc.stdin.close()
+                    except Exception:
+                        pass
+            sys_pump_thread = threading.Thread(target=_pump_sys, daemon=True)
+            sys_pump_thread.start()
         except Exception as e:  # pragma: no cover
             _status(f"Kunne ikke starte systemlyd-optagelse: {e} — fortsætter mic-kun.")
             sys_ok = False
 
     def stop_all():
-        # Mic: ffmpeg pænt via 'q' til stdin
         try:
             if mic_proc.stdin and not mic_proc.stdin.closed:
                 mic_proc.stdin.write(b"q")
@@ -576,7 +614,6 @@ def _record_dual_tracks(
                 mic_proc.stdin.close()
         except Exception:  # pragma: no cover
             mic_proc.terminate()
-        # Sys: SIGINT til AudioTee → den lukker stdout → sys-ffmpeg ser EOF og afslutter
         if audiotee_proc is not None and audiotee_proc.poll() is None:
             try:
                 audiotee_proc.send_signal(signal.SIGINT)
@@ -601,14 +638,13 @@ def _record_dual_tracks(
                     pass
 
     if stop_event is not None:
-        # Vent til brugeren trykker Stop, signalér SÅ processerne og dræn dem.
-        # (Tidligere kørte _drain straks med 12s-timeout via en watch-tråd, så
-        #  optagelsen afsluttede sig selv efter ~12s uanset brugeren — bug'en.)
         stop_event.wait()
         stop_all()
         _drain(mic_proc, "ffmpeg-mic")
         if audiotee_proc is not None:
             _drain(audiotee_proc, "AudioTee")
+        if sys_pump_thread is not None:
+            sys_pump_thread.join(timeout=5)
         if sys_ffmpeg_proc is not None:
             _drain(sys_ffmpeg_proc, "ffmpeg-sys")
     else:  # pragma: no cover
@@ -617,12 +653,29 @@ def _record_dual_tracks(
             _drain(mic_proc, "ffmpeg-mic")
             if audiotee_proc is not None:
                 _drain(audiotee_proc, "AudioTee")
+            if sys_pump_thread is not None:
+                sys_pump_thread.join(timeout=5)
             if sys_ffmpeg_proc is not None:
                 _drain(sys_ffmpeg_proc, "ffmpeg-sys")
         finally:
             signal.signal(signal.SIGINT, original)
 
-    return sys_ok and sys_path.exists() and sys_path.stat().st_size > 0
+    capture_stop.set()
+    mic_poll_thread.join(timeout=1)
+
+    result = _resolve_sync(
+        stamps, mic_path, sys_path, sys_ok,
+        now=time.time(), duration_fn=_ffprobe_duration,
+    )
+    name = mic_path.name
+    suffix = ".mic.wav"
+    base = name[:-len(suffix)] if name.endswith(suffix) else mic_path.stem
+    sidecar_path = mic_path.with_name(base + ".sync.json")
+    try:
+        _write_sync_sidecar(sidecar_path, result)
+    except Exception as e:  # pragma: no cover
+        _status(f"Kunne ikke skrive {sidecar_path.name}: {e}")
+    return result
 
 
 # ---------------------------------------------------------------------------
