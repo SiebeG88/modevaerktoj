@@ -124,3 +124,20 @@ def merge_tracks(
         ts = f"[{_format_timestamp(start)} - {_format_timestamp(end)}]"
         lines.append(f"{ts} {label}: {text}")
     return "\n".join(lines)
+
+
+def build_transcript(
+    mic_segs: list[Segment],
+    sys_segs: list[Segment],
+    *,
+    mic_dur: float,
+    sys_dur: float,
+    mic_start: float,
+    sys_start: float,
+) -> str:
+    """Saner → forskyd til fælles t=0 → fjern bleed → flet til mærket transkript."""
+    zero = min(mic_start, sys_start)
+    mic = shift_segments(sanitize_segments(mic_segs, mic_dur), mic_start - zero)
+    sys = shift_segments(sanitize_segments(sys_segs, sys_dur), sys_start - zero)
+    mic = remove_bleed(mic, sys)
+    return merge_tracks(mic, sys)

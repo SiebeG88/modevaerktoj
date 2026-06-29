@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from transcript_merge import (merge_tracks, sanitize_segments, shift_segments, remove_bleed)
+from transcript_merge import (merge_tracks, sanitize_segments, shift_segments, remove_bleed, build_transcript)
 
 
 class TestMergeTracks:
@@ -94,3 +94,26 @@ class TestShiftSegments:
 
     def test_empty(self):
         assert shift_segments([], 5.0) == []
+
+
+class TestBuildTranscript:
+    def test_aligns_and_dedups_bleed(self):
+        # sys (Modpart) er ren reference. mic startede 225 s senere end sys,
+        # og samme ytring optræder i mic (bleed) ved 50 s og i sys ved 275 s.
+        phrase = "vi er landbrug og digitalisering med tres medarbejdere i aarhus"
+        mic = [(50.0, 60.0, phrase)]
+        sys = [(275.0, 285.0, phrase)]
+        out = build_transcript(
+            mic, sys, mic_dur=300.0, sys_dur=600.0,
+            mic_start=1225.0, sys_start=1000.0,
+        )
+        lines = out.splitlines()
+        assert len(lines) == 1
+        assert lines[0] == "[04:35 - 04:45] Modpart: " + phrase
+
+    def test_mic_only(self):
+        out = build_transcript(
+            [(0.0, 5.0, "kun mig her")], [],
+            mic_dur=10.0, sys_dur=0.0, mic_start=1000.0, sys_start=1000.0,
+        )
+        assert out == "[00:00 - 00:05] Mig: kun mig her"
