@@ -19,6 +19,38 @@ def _format_timestamp(seconds: float) -> str:
     return f"{h:d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
 
+def sanitize_segments(
+    segments: list[Segment],
+    max_duration: float,
+    *,
+    max_segment_seconds: float = 120.0,
+) -> list[Segment]:
+    """Klem og reparér tidsstempler, så de er fysisk mulige og monotont stigende.
+
+    - start/end klemmes til [0, max_duration]
+    - end >= start
+    - starttider gøres ikke-faldende (for tidligt start skubbes op til forrige)
+    - spænd > max_segment_seconds reduceres (end = start + max_segment_seconds)
+    Teksten bevares uændret.
+    """
+    cleaned: list[Segment] = []
+    prev_start = 0.0
+    for start, end, text in segments:
+        start = min(max(start, 0.0), max_duration)
+        end = min(max(end, 0.0), max_duration)
+        if end < start:
+            end = start
+        if start < prev_start:
+            start = prev_start
+            if end < start:
+                end = start
+        if end - start > max_segment_seconds:
+            end = min(start + max_segment_seconds, max_duration)
+        cleaned.append((start, end, text))
+        prev_start = start
+    return cleaned
+
+
 def merge_tracks(
     mic_segments: list[Segment],
     sys_segments: list[Segment],

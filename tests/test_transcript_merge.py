@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from transcript_merge import merge_tracks
+from transcript_merge import merge_tracks, sanitize_segments
 
 
 class TestMergeTracks:
@@ -38,3 +38,26 @@ class TestMergeTracks:
         result = merge_tracks(mic, sys_).splitlines()
         assert result[0] == "[00:03 - 00:04] Mig: A"
         assert result[1] == "[00:03 - 00:04] Modpart: B"
+
+
+class TestSanitizeSegments:
+    def test_clamps_to_duration(self):
+        out = sanitize_segments([(3010.0, 4210.0, "langt fremme")], 2853.0)
+        assert out == [(2853.0, 2853.0, "langt fremme")]
+
+    def test_enforces_non_decreasing_start(self):
+        out = sanitize_segments([(10.0, 12.0, "a"), (5.0, 7.0, "b")], 100.0)
+        assert out[0][0] == 10.0
+        assert out[1][0] == 10.0          # skubbet op til forrige start
+        assert out[1][1] >= out[1][0]
+
+    def test_repairs_overlong_span(self):
+        out = sanitize_segments([(10.0, 400.0, "spaend")], 1000.0, max_segment_seconds=120.0)
+        assert out == [(10.0, 130.0, "spaend")]
+
+    def test_end_not_before_start(self):
+        out = sanitize_segments([(50.0, 30.0, "omvendt")], 100.0)
+        assert out[0][1] >= out[0][0]
+
+    def test_empty(self):
+        assert sanitize_segments([], 100.0) == []
