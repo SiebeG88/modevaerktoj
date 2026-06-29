@@ -14,10 +14,18 @@ import pytest
 ctk = pytest.importorskip("customtkinter")
 import tkinter
 
-# Spring hele modulet over hvis der ikke er et display.
+# Spring hele modulet over hvis der ikke er et display eller Tk-versionen
+# er inkompatibel med customtkinter (Tk 9.x crash i CTkScrollableFrame).
 try:
-    _probe = tkinter.Tk()
-    _probe.destroy()
+    _probe_root = tkinter.Tk()
+    _tk_version = tuple(int(x) for x in _probe_root.tk.call("info", "patchlevel").split(".")[:2])
+    _probe_root.destroy()
+    if _tk_version >= (9, 0):
+        pytest.skip(
+            f"Tk {'.'.join(str(x) for x in _tk_version)} er inkompatibel med "
+            "customtkinter CTkScrollableFrame — spring over",
+            allow_module_level=True,
+        )
 except Exception:  # pragma: no cover - kun på headless miljøer
     pytest.skip("Intet Tk-display tilgængeligt", allow_module_level=True)
 
