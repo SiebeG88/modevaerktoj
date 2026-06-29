@@ -73,10 +73,10 @@ load_env_file()
 
 
 def _needs_setup() -> bool:
-    """True hvis hverken Gateway-token eller direkte Anthropic-nøgle er sat —
-    så viser vi første-start-dialogen."""
-    return not (os.environ.get("ANTHROPIC_AUTH_TOKEN")
-                or os.environ.get("ANTHROPIC_API_KEY"))
+    """True hvis ingen Gemini-nøgle er sat — så viser vi første-start-dialogen.
+    Hviske (lokal transkription) virker uden nøgle, så dialogen kan springes over."""
+    return not (os.environ.get("GEMINI_API_KEY")
+                or os.environ.get("GOOGLE_API_KEY"))
 
 
 def _write_env(values: dict[str, str]) -> None:
@@ -2574,12 +2574,11 @@ class TranscribeFileTab:
 
 
 def _first_run_setup(root: ctk.CTk) -> None:
-    """Modal første-start-dialog der beder om brugernavn og API-nøgler.
-    Blokerer til brugeren har trykket 'Gem og fortsæt'."""
+    """Modal første-start-dialog der beder om Gemini-nøglen.
+    Kan springes over — lokal Hviske-transkription virker uden nøgle."""
     dialog = ctk.CTkToplevel(root)
     dialog.title("Mødeværktøj — opsætning")
     dialog.resizable(False, False)
-    # grab_set kan fejle tavst hvis vinduet ikke er renderet endnu (Windows/Tk).
     dialog.update_idletasks()
     dialog.grab_set()
 
@@ -2587,42 +2586,44 @@ def _first_run_setup(root: ctk.CTk) -> None:
         dialog,
         text=(
             "Velkommen til Mødeværktøjet!\n"
-            "Indtast dine oplysninger for at komme i gang."
+            "Indsæt din Gemini-nøgle for at bruge cloud-transkription og "
+            "referat-generering. Du kan også fortsætte uden og kun bruge "
+            "lokal transkription."
         ),
-        wraplength=340,
+        wraplength=360,
         justify="left",
     ).grid(row=0, column=0, columnspan=2, padx=20, pady=(20, 12), sticky="w")
 
-    ctk.CTkLabel(dialog, text="Brugernavn:").grid(
+    ctk.CTkLabel(dialog, text="Gemini-nøgle:").grid(
         row=1, column=0, padx=(20, 8), pady=6, sticky="e"
     )
-    user_entry = ctk.CTkEntry(dialog, width=220)
-    user_entry.grid(row=1, column=1, padx=(0, 20), pady=6, sticky="w")
+    gemini_entry = ctk.CTkEntry(dialog, width=240, show="*")
+    gemini_entry.grid(row=1, column=1, padx=(0, 20), pady=6, sticky="w")
 
-    ctk.CTkLabel(dialog, text="Gateway-nøgle (Claude):").grid(
-        row=2, column=0, padx=(20, 8), pady=6, sticky="e"
-    )
-    gateway_entry = ctk.CTkEntry(dialog, width=220, show="*")
-    gateway_entry.grid(row=2, column=1, padx=(0, 20), pady=6, sticky="w")
-
-    ctk.CTkLabel(dialog, text="Gemini-nøgle:").grid(
-        row=3, column=0, padx=(20, 8), pady=6, sticky="e"
-    )
-    gemini_entry = ctk.CTkEntry(dialog, width=220, show="*")
-    gemini_entry.grid(row=3, column=1, padx=(0, 20), pady=6, sticky="w")
+    ctk.CTkLabel(
+        dialog,
+        text="Få en gratis nøgle på aistudio.google.com/apikey",
+        font=ctk.CTkFont(size=11),
+        text_color="gray",
+    ).grid(row=2, column=0, columnspan=2, padx=20, pady=(0, 10), sticky="w")
 
     def _save():
-        _write_env({
-            "MT_USER": user_entry.get().strip(),
-            "ANTHROPIC_BASE_URL": "https://ai-gateway.vercel.sh",
-            "ANTHROPIC_AUTH_TOKEN": gateway_entry.get().strip(),
-            "GEMINI_API_KEY": gemini_entry.get().strip(),
-        })
+        _write_env({"GEMINI_API_KEY": gemini_entry.get().strip()})
         dialog.destroy()
 
-    ctk.CTkButton(dialog, text="Gem og fortsæt", command=_save).grid(
-        row=4, column=0, columnspan=2, padx=20, pady=(12, 20)
+    btn_row = ctk.CTkFrame(dialog, fg_color="transparent")
+    btn_row.grid(row=3, column=0, columnspan=2, padx=20, pady=(12, 20))
+    ctk.CTkButton(btn_row, text="Gem og fortsæt", command=_save).pack(
+        side="left", padx=6
     )
+    ctk.CTkButton(
+        btn_row,
+        text="Fortsæt uden nøgle",
+        fg_color="transparent",
+        text_color=_CLR["text_secondary"],
+        border_width=1,
+        command=dialog.destroy,
+    ).pack(side="left", padx=6)
 
     root.wait_window(dialog)
 
@@ -2680,14 +2681,7 @@ def main():
 
     root = ctk.CTk()
     if _needs_setup():
-        _first_run_setup(root)   # modal; blokerer til nøgler er gemt
-        if _needs_setup():
-            # Brugeren lukkede dialogen uden at gemme nøgler — afslut pænt i
-            # stedet for at fortsætte og crashe ved første API-kald.
-            print("Opsætning afbrudt — ingen API-nøgle. Afslutter.",
-                  file=sys.stderr)
-            root.destroy()
-            return
+        _first_run_setup(root)   # modal; kan springes over (Hviske virker uden nøgle)
 
     # Set window icon if .icns exists in app bundle
     icns_path = TOOL_DIR / "Mødeværktøj.app" / "Contents" / "Resources" / "AppIcon.icns"

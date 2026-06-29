@@ -1,4 +1,4 @@
-# tests/test_gateway.py
+# tests/test_setup.py
 import os
 
 import pytest
@@ -7,21 +7,20 @@ import meeting_tool
 import meeting_app
 
 
-def test_needs_setup_true_when_no_keys(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+def test_needs_setup_true_when_no_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     assert meeting_app._needs_setup() is True
 
 
-def test_needs_setup_false_with_gateway_token(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "x")
+def test_needs_setup_false_with_gemini_key(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "g-123")
     assert meeting_app._needs_setup() is False
 
 
-def test_needs_setup_false_with_direct_key(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+def test_needs_setup_false_with_google_key(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "g-456")
     assert meeting_app._needs_setup() is False
 
 
@@ -30,11 +29,11 @@ def test_write_env_persists_and_sets_environ(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     monkeypatch.setattr(meeting_app, "ENV_FILE", env_file)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    meeting_app._write_env({"GEMINI_API_KEY": "g-123", "MT_USER": "Dorte", "EMPTY": ""})
+    meeting_app._write_env({"GEMINI_API_KEY": "g-123", "MEETINGS_DIR": "/data/m", "EMPTY": ""})
     # Filen er skrevet og indeholder de ikke-tomme nøgler:
     text = env_file.read_text(encoding="utf-8")
     assert "GEMINI_API_KEY=g-123" in text
-    assert "MT_USER=Dorte" in text
+    assert "MEETINGS_DIR=/data/m" in text
     assert "EMPTY=" not in text           # tomme værdier springes over
     # os.environ er opdateret:
     assert os.environ["GEMINI_API_KEY"] == "g-123"
@@ -45,10 +44,10 @@ def test_write_env_preserves_existing_keys(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text("MEETINGS_DIR=/data/moeder\n", encoding="utf-8")
     monkeypatch.setattr(meeting_app, "ENV_FILE", env_file)
-    meeting_app._write_env({"ANTHROPIC_AUTH_TOKEN": "gw-1"})
+    meeting_app._write_env({"GEMINI_API_KEY": "g-1"})
     text = env_file.read_text(encoding="utf-8")
     assert "MEETINGS_DIR=/data/moeder" in text   # bevaret
-    assert "ANTHROPIC_AUTH_TOKEN=gw-1" in text    # tilføjet
+    assert "GEMINI_API_KEY=g-1" in text           # tilføjet
 
 
 class _FakeRoot:
