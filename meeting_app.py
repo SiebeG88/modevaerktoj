@@ -761,6 +761,29 @@ class MeetingApp:
             anchor="w",
         ).pack(fill="x", pady=(0, 10))
 
+        # -- Version + manuel opdaterings-knap. Kun på frosset Windows-bundle:
+        # OTA-swap (apply_and_restart) er Windows-only, og kildekode-kørsel
+        # opdateres med `git pull`, ikke via Releases.
+        import app_paths
+        from _version import __version__
+        if app_paths.is_frozen() and sys.platform == "win32":
+            self._field_label(self._settings_inner, "Opdatering")
+            update_row = ctk.CTkFrame(self._settings_inner, fg_color="transparent")
+            update_row.pack(fill="x", pady=(0, 4))
+            ctk.CTkLabel(
+                update_row,
+                text=f"Version {__version__}",
+                font=ctk.CTkFont(size=12),
+                text_color=_CLR["text_secondary"],
+            ).pack(side="left")
+            self._update_btn = ctk.CTkButton(
+                update_row, text="Søg efter opdatering", width=180, height=36,
+                corner_radius=10, fg_color=_CLR["accent"],
+                hover_color=_CLR["accent_hover"],
+                command=self._check_update_now,
+            )
+            self._update_btn.pack(side="right")
+
         # ── Hero recording button area ──────────────────────────────
         hero_frame = ctk.CTkFrame(self._outer, fg_color="transparent")
         hero_frame.pack(fill="x", pady=(20, 0))
@@ -880,6 +903,46 @@ class MeetingApp:
             return
         _write_env({"GEMINI_API_KEY": key})
         self.status_var.set("Gemini-nøgle gemt.")
+
+    def _check_update_now(self):
+        """Manuelt udløst OTA-tjek (knappen i Indstillinger). Nettet kører i en
+        baggrundstråd; alle GUI-opdateringer marshalleres via root.after.
+        Genbruger updater + _maybe_apply_update (der venter med at genstarte,
+        hvis appen optager eller transkriberer)."""
+        import tempfile
+        import updater
+        from _version import __version__
+
+        self._update_btn.configure(state="disabled", text="Søger…")
+        self.status_var.set("Søger efter opdatering…")
+        root = self.root
+
+        def worker():
+            try:
+                rel = updater.check_for_update()
+            except Exception as e:  # check_for_update kaster normalt ikke; defensivt
+                root.after(0, lambda: self._update_finished(f"Tjek fejlede: {e}"))
+                return
+            if not rel:
+                root.after(0, lambda: self._update_finished(
+                    f"Du har allerede den nyeste version (v{__version__})."))
+                return
+            root.after(0, lambda: self.status_var.set(f"Henter {rel.tag}…"))
+            try:
+                staging = updater.download_and_stage(
+                    rel, Path(tempfile.gettempdir()) / "modevaerktoj-update")
+            except updater.UpdateError as e:
+                root.after(0, lambda: self._update_finished(f"Opdatering fejlede: {e}"))
+                return
+            # Anvend + genstart — _maybe_apply_update venter, hvis appen er optaget.
+            root.after(0, lambda: _maybe_apply_update(root, self, staging))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_finished(self, msg: str):
+        """Vis besked og genaktivér opdaterings-knappen (kaldes på GUI-tråden)."""
+        self.status_var.set(msg)
+        self._update_btn.configure(state="normal", text="Søg efter opdatering")
 
     def _toggle_settings(self):
         if self._settings_visible:
