@@ -1,10 +1,10 @@
-"""Tests for format_vocabulary_for_{claude,gemini,hviske}."""
+"""Tests for format_vocabulary_for_{minutes,gemini,hviske}."""
 from __future__ import annotations
 
 import meeting_tool
 
 
-def test_claude_all_categories():
+def test_minutes_all_categories():
     vocab = {
         "personer": ["Mads — driftsleder", "Anna — ejer"],
         "steder": ["Nordmarken"],
@@ -20,7 +20,7 @@ def test_claude_all_categories():
     assert "- ramsning" in out
 
 
-def test_claude_empty_category_skipped():
+def test_minutes_empty_category_skipped():
     vocab = {"personer": ["Mads"], "steder": [], "fagtermer": []}
     out = meeting_tool.format_vocabulary_for_minutes(vocab)
     assert "**Personer:**" in out
@@ -28,7 +28,7 @@ def test_claude_empty_category_skipped():
     assert "**Fagtermer:**" not in out
 
 
-def test_claude_all_empty_returns_placeholder():
+def test_minutes_all_empty_returns_placeholder():
     vocab = {"personer": [], "steder": [], "fagtermer": []}
     out = meeting_tool.format_vocabulary_for_minutes(vocab)
     assert out == "(ingen ordliste konfigureret)"

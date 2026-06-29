@@ -2734,7 +2734,7 @@ def format_vocabulary_for_minutes(vocab: dict[str, list[str]]) -> str:
 def format_vocabulary_for_gemini(vocab: dict[str, list[str]]) -> str:
     """Formaterer vocab som markdown-sektion til Gemini SYSTEM_INSTRUCTION.
 
-    Formatet matcher Claude-versionen i struktur, men med en
+    Formatet matcher referat-versionen i struktur, men med en
     transkriptions-orienteret indledning (bias akustisk genkendelse).
     """
     has_any = any(vocab.get(cat) for cat in VOCAB_CATEGORIES)
