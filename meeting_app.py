@@ -374,8 +374,8 @@ class MeetingApp:
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # Åbn guiden "Ny optagelse" ved opstart (kan springes over).
-        self.root.after(300, lambda: self._open_wizard(0))
+        # Wizarden åbnes via "Ny optagelse"-knappen — IKKE automatisk ved opstart
+        # (et auto-pop-up Toplevel fik appen til at "åbne to gange").
 
         # Vis mini-HUD når vinduet minimeres mens der optages/transkriberes.
         self.root.bind("<Unmap>", self._on_minimize)
@@ -472,6 +472,11 @@ class MeetingApp:
         # Byg Historik-fanen
         self._historik_tab = HistorikTab(self._tabview.tab("Historik"), self)
 
+        # Global musehjul-scroll: ét bind_all-handler der finder den
+        # scrollbare canvas under markøren og scroller den. Robust mod at
+        # hjul-events lander på child-widgets (label/frame) i stedet for canvas.
+        self._setup_global_scroll()
+
     # ------------------------------------------------------------------
     # Small helpers
     # ------------------------------------------------------------------
@@ -492,12 +497,18 @@ class MeetingApp:
 
     def _build_record_screen(self, parent):
         """Optag-fanen: ren optage-skærm med konfig-oversigt + stor knap."""
+        parent.configure(fg_color=_CLR["bg"])
+        # Fast bundlinje med Start-knap + timer — ALTID synlig, uafhængig af scroll.
+        # Pakkes FØR det scrollbare indhold (side=bottom) så den reserverer pladsen.
+        bottom_bar = ctk.CTkFrame(parent, fg_color=_CLR["bg"])
+        bottom_bar.pack(side="bottom", fill="x")
+
         outer = ctk.CTkScrollableFrame(
             parent, fg_color=_CLR["bg"],
             scrollbar_button_color=_CLR["card_border"],
             scrollbar_button_hover_color=_CLR["accent"],
         )
-        outer.pack(fill="both", expand=True)
+        outer.pack(side="top", fill="both", expand=True)
 
         header = ctk.CTkFrame(outer, fg_color="transparent")
         header.pack(fill="x", padx=28, pady=(24, 4))
@@ -574,18 +585,16 @@ class MeetingApp:
             border_width=2, border_color=_CLR["card_border"],
         ).pack(anchor="w", padx=20, pady=(0, 16))
 
-        # — Hero record-knap
-        hero_frame = ctk.CTkFrame(outer, fg_color="transparent")
-        hero_frame.pack(fill="x", pady=(20, 0))
-        self.hero_btn = HeroButton(hero_frame, command=self._toggle_recording, bg=_CLR["bg"])
-        self.hero_btn.pack(anchor="center")
+        # — Hero record-knap + timer i den FASTE bundlinje (altid synlig)
+        self.hero_btn = HeroButton(bottom_bar, command=self._toggle_recording, bg=_CLR["bg"])
+        self.hero_btn.pack(anchor="center", pady=(8, 0))
         self.timer_var = ctk.StringVar(value="00:00:00")
         self.timer_label = ctk.CTkLabel(
-            hero_frame, textvariable=self.timer_var,
-            font=ctk.CTkFont(family="SF Mono", size=28, weight="bold"),
+            bottom_bar, textvariable=self.timer_var,
+            font=ctk.CTkFont(family="SF Mono", size=22, weight="bold"),
             text_color=_CLR["text"],
         )
-        self.timer_label.pack(anchor="center", pady=(6, 0))
+        self.timer_label.pack(anchor="center", pady=(2, 10))
 
         # — Status / log
         log_card = ctk.CTkFrame(
@@ -600,7 +609,7 @@ class MeetingApp:
             anchor="w",
         ).pack(fill="x", padx=16, pady=(14, 6))
         self.log = ctk.CTkTextbox(
-            log_card, height=160, corner_radius=10,
+            log_card, height=110, corner_radius=10,
             border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
             font=ctk.CTkFont(family="SF Mono", size=12), text_color=_CLR["text"],
             wrap="word", state="disabled",
@@ -612,6 +621,45 @@ class MeetingApp:
                    self.engine_var, self.folder_var, self.device_var,
                    self.system_audio_var):
             _v.trace_add("write", lambda *a: self._refresh_summary())
+
+    def _setup_global_scroll(self):
+        """Bind ÉT musehjul-handler globalt (bind_all). Det scroller scroll-området
+        i den aktive fane, uanset hvilken child-widget (label/frame) hjul-eventet
+        landede på — det var grunden til at scroll ikke virkede på macOS."""
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.root.bind_all(seq, self._global_wheel, add="+")
+
+    @staticmethod
+    def _scroll_canvas_in(widget):
+        """Find CTkScrollableFrames canvas inde i en widget (fx en aktiv fane)."""
+        if isinstance(widget, ctk.CTkScrollableFrame):
+            return widget._parent_canvas
+        for child in widget.winfo_children():
+            cv = MeetingApp._scroll_canvas_in(child)
+            if cv is not None:
+                return cv
+        return None
+
+    def _global_wheel(self, event):
+        # Scroll scroll-området i den AKTIVE fane, uanset hvilken child-widget
+        # hjul-eventet ramte (det er det brugeren forventer). winfo_viewable er
+        # upålidelig i CTkTabview, så vi går via den aktive fanes navn.
+        try:
+            active = self._tabview.tab(self._tabview.get())
+        except Exception:
+            return
+        cv = self._scroll_canvas_in(active)
+        if cv is None:
+            return
+        first, last = cv.yview()
+        if first <= 0.0 and last >= 1.0:
+            return  # indholdet passer i ruden — intet at scrolle
+        if getattr(event, "num", None) == 4:
+            cv.yview_scroll(-3, "units")
+        elif getattr(event, "num", None) == 5:
+            cv.yview_scroll(3, "units")
+        else:
+            cv.yview_scroll(-3 if event.delta > 0 else 3, "units")
 
     def _build_settings_tab(self, parent):
         """Indstillinger-fanen: vedvarende/avancerede valg, grupperet i kort."""
@@ -2891,7 +2939,8 @@ class MeetingWizard(ctk.CTkToplevel):
 
     def _highlight_form(self, val):
         for v, c in self._form_cards.items():
-            c.configure(border_color=_CLR["accent"] if v == val else _CLR["card_border"])
+            if c.winfo_exists():
+                c.configure(border_color=_CLR["accent"] if v == val else _CLR["card_border"])
 
     # — Trin 2: Mødetype ----------------------------------------------
     def _build_type(self):
@@ -2932,7 +2981,8 @@ class MeetingWizard(ctk.CTkToplevel):
 
     def _highlight_type(self, key):
         for k, c in self._type_cards.items():
-            c.configure(border_color=_CLR["accent"] if k == key else _CLR["card_border"])
+            if c.winfo_exists():
+                c.configure(border_color=_CLR["accent"] if k == key else _CLR["card_border"])
 
     # — Trin 3: Navn & deltagere --------------------------------------
     def _build_navn(self):
@@ -2998,7 +3048,8 @@ class MeetingWizard(ctk.CTkToplevel):
 
     def _highlight_motor(self, val):
         for v, c in self._motor_cards.items():
-            c.configure(border_color=_CLR["accent"] if v == val else _CLR["card_border"])
+            if c.winfo_exists():
+                c.configure(border_color=_CLR["accent"] if v == val else _CLR["card_border"])
         no_key = not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
         if val == "gemini" and no_key:
             self._motor_hint.configure(
