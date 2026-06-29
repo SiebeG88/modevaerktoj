@@ -51,6 +51,11 @@ def sanitize_segments(
     return cleaned
 
 
+def shift_segments(segments: list[Segment], offset: float) -> list[Segment]:
+    """Læg offset (sekunder) til alle start/slut-tider."""
+    return [(start + offset, end + offset, text) for start, end, text in segments]
+
+
 def merge_tracks(
     mic_segments: list[Segment],
     sys_segments: list[Segment],

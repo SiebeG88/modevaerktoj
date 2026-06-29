@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from transcript_merge import merge_tracks, sanitize_segments
+from transcript_merge import merge_tracks, sanitize_segments, shift_segments
 
 
 class TestMergeTracks:
@@ -61,3 +61,14 @@ class TestSanitizeSegments:
 
     def test_empty(self):
         assert sanitize_segments([], 100.0) == []
+
+
+class TestShiftSegments:
+    def test_positive_offset(self):
+        assert shift_segments([(1.0, 2.0, "x")], 5.0) == [(6.0, 7.0, "x")]
+
+    def test_zero_offset(self):
+        assert shift_segments([(1.0, 2.0, "x")], 0.0) == [(1.0, 2.0, "x")]
+
+    def test_empty(self):
+        assert shift_segments([], 5.0) == []
