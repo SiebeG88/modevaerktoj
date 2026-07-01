@@ -657,7 +657,7 @@ class MeetingApp:
                 r, text="Skift", width=54, height=26, corner_radius=7,
                 font=ctk.CTkFont(size=12), fg_color="transparent",
                 border_width=1, border_color=_CLR["card_border"],
-                text_color=_CLR["accent"], hover_color="#e0e7ff",
+                text_color=_CLR["accent"], hover_color="#eef2fb",
                 command=on_change,
             ).pack(side="right")
             self._sum_labels[key] = val
@@ -703,7 +703,7 @@ class MeetingApp:
         ).pack(fill="x", padx=16, pady=(14, 6))
         self.log = ctk.CTkTextbox(
             log_card, height=110, corner_radius=10,
-            border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
+            border_width=1, border_color=_CLR["card_border"], fg_color="#ffffff",
             font=ctk.CTkFont(family="SF Mono", size=12), text_color=_CLR["text"],
             wrap="word", state="disabled",
         )
@@ -795,7 +795,7 @@ class MeetingApp:
         folder_row.pack(fill="x", pady=(0, 0))
         self._folder_entry = ctk.CTkEntry(
             folder_row, textvariable=self.folder_var, height=36, corner_radius=10,
-            border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
+            border_width=1, border_color=_CLR["card_border"], fg_color="#ffffff",
             text_color=_CLR["text"], placeholder_text_color=_CLR["text_placeholder"],
             font=ctk.CTkFont(size=13),
         )
@@ -813,16 +813,16 @@ class MeetingApp:
         mic_row.pack(fill="x", pady=(0, 10))
         self.device_combo = ctk.CTkComboBox(
             mic_row, variable=self.device_var, height=36, corner_radius=10,
-            border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
+            border_width=1, border_color=_CLR["card_border"], fg_color="#ffffff",
             text_color=_CLR["text"], button_color=_CLR["accent"],
             button_hover_color=_CLR["accent_hover"], dropdown_fg_color=_CLR["card"],
-            dropdown_hover_color="#e0e7ff", font=ctk.CTkFont(size=13), state="readonly",
+            dropdown_hover_color="#eef2fb", font=ctk.CTkFont(size=13), state="readonly",
         )
         self.device_combo.pack(side="left", fill="x", expand=True, padx=(0, 8))
         ctk.CTkButton(
             mic_row, text="Opdater", width=80, height=36, corner_radius=10,
             fg_color="transparent", border_width=1, border_color=_CLR["card_border"],
-            text_color=_CLR["text"], hover_color="#e0e7ff", font=ctk.CTkFont(size=13),
+            text_color=_CLR["text"], hover_color="#eef2fb", font=ctk.CTkFont(size=13),
             command=self._refresh_devices,
         ).pack(side="right")
         if sys.platform != "win32":
@@ -840,7 +840,7 @@ class MeetingApp:
             self.setup_audio_btn = ctk.CTkButton(
                 audio, text="Opsæt systemlyd", height=32, corner_radius=8,
                 fg_color="transparent", border_width=1, border_color=_CLR["card_border"],
-                text_color=_CLR["text"], hover_color="#e0e7ff", font=ctk.CTkFont(size=13),
+                text_color=_CLR["text"], hover_color="#eef2fb", font=ctk.CTkFont(size=13),
                 command=self._setup_system_audio,
             )
             self.setup_audio_btn.pack(fill="x", pady=(0, 0))
@@ -862,7 +862,7 @@ class MeetingApp:
             btn = ctk.CTkButton(
                 engine_frame, text=label, height=32, corner_radius=8,
                 font=ctk.CTkFont(size=13), fg_color="transparent",
-                text_color=_CLR["text_secondary"], hover_color="#e0e7ff",
+                text_color=_CLR["text_secondary"], hover_color="#eef2fb",
                 command=lambda v=val: self._select_engine(v),
             )
             btn.pack(side="left", fill="x", expand=True, padx=3, pady=3)
@@ -1057,7 +1057,7 @@ class MeetingApp:
                 btn.configure(
                     fg_color="transparent",
                     text_color=_CLR["text_secondary"],
-                    hover_color="#e0e7ff",
+                    hover_color="#eef2fb",
                 )
         if value == "gemini":
             self._engine_hint.configure(
@@ -1775,7 +1775,7 @@ class VocabularyTab:
             text_color=_CLR["accent"],
             border_width=1,
             border_color=_CLR["card_border"],
-            hover_color="#e0e7ff",
+            hover_color="#eef2fb",
             command=lambda k=key: self._add_row(k, "", focus=True),
         )
         add_btn.pack(anchor="w", padx=20, pady=(8, 16))
@@ -1950,12 +1950,12 @@ class MeetingTypesTab:
             border_width=1,
             border_color=_CLR["card_border"],
             state="readonly",
-            fg_color="#f8fafc",
+            fg_color="#ffffff",
             button_color=_CLR["accent"],
             button_hover_color=_CLR["accent_hover"],
             text_color=_CLR["text"],
             dropdown_fg_color=_CLR["card"],
-            dropdown_hover_color="#e0e7ff",
+            dropdown_hover_color="#eef2fb",
             font=ctk.CTkFont(size=13),
             command=self._on_select,
         )
@@ -1971,7 +1971,7 @@ class MeetingTypesTab:
             corner_radius=10,
             border_width=1,
             border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
+            fg_color="#ffffff",
             text_color=_CLR["text"],
             placeholder_text_color=_CLR["text_placeholder"],
             font=ctk.CTkFont(size=13),
@@ -1987,7 +1987,7 @@ class MeetingTypesTab:
             selected_color=_CLR["accent"],
             selected_hover_color=_CLR["accent_hover"],
             unselected_color=_CLR["card_border"],
-            unselected_hover_color="#e0e7ff",
+            unselected_hover_color="#eef2fb",
         )
         self.detalje.pack(fill="x", pady=(0, 10))
 
@@ -2029,7 +2029,7 @@ class MeetingTypesTab:
             corner_radius=10,
             border_width=1,
             border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
+            fg_color="#ffffff",
             text_color=_CLR["text"],
             placeholder_text="Hvad skal referatet lægge særlig vægt på?",
             placeholder_text_color=_CLR["text_placeholder"],
@@ -2044,7 +2044,7 @@ class MeetingTypesTab:
             corner_radius=10,
             border_width=1,
             border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
+            fg_color="#ffffff",
             text_color=_CLR["text"],
             font=ctk.CTkFont(size=13),
             wrap="word",
@@ -2061,7 +2061,7 @@ class MeetingTypesTab:
             corner_radius=10,
             border_width=1,
             border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
+            fg_color="#ffffff",
             text_color=_CLR["text"],
             placeholder_text="Komma-adskilt liste af standard-deltagere",
             placeholder_text_color=_CLR["text_placeholder"],
@@ -2083,7 +2083,7 @@ class MeetingTypesTab:
             text_color=_CLR["accent"],
             border_width=1,
             border_color=_CLR["card_border"],
-            hover_color="#e0e7ff",
+            hover_color="#eef2fb",
             command=self._new,
         ).pack(side="left", padx=(0, 8))
 
@@ -2308,7 +2308,7 @@ class TranscribeFileTab:
             corner_radius=10,
             border_width=1,
             border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
+            fg_color="#ffffff",
             text_color=_CLR["text"],
             placeholder_text="Ingen fil valgt",
             placeholder_text_color=_CLR["text_placeholder"],
@@ -2341,7 +2341,7 @@ class TranscribeFileTab:
             corner_radius=10,
             border_width=1,
             border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
+            fg_color="#ffffff",
             text_color=_CLR["text"],
             placeholder_text_color=_CLR["text_placeholder"],
             font=ctk.CTkFont(size=13),
@@ -2372,12 +2372,12 @@ class TranscribeFileTab:
             border_width=1,
             border_color=_CLR["card_border"],
             state="readonly",
-            fg_color="#f8fafc",
+            fg_color="#ffffff",
             button_color=_CLR["accent"],
             button_hover_color=_CLR["accent_hover"],
             text_color=_CLR["text"],
             dropdown_fg_color=_CLR["card"],
-            dropdown_hover_color="#e0e7ff",
+            dropdown_hover_color="#eef2fb",
             font=ctk.CTkFont(size=13),
             command=self._on_type_selected,
         )
@@ -2393,7 +2393,7 @@ class TranscribeFileTab:
             corner_radius=10,
             border_width=1,
             border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
+            fg_color="#ffffff",
             text_color=_CLR["text"],
             placeholder_text="Udfyldes automatisk fra filnavnet",
             placeholder_text_color=_CLR["text_placeholder"],
@@ -2417,7 +2417,7 @@ class TranscribeFileTab:
             corner_radius=10,
             border_width=1,
             border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
+            fg_color="#ffffff",
             text_color=_CLR["text"],
             placeholder_text_color=_CLR["text_placeholder"],
             font=ctk.CTkFont(size=13),
@@ -2434,7 +2434,7 @@ class TranscribeFileTab:
             corner_radius=10,
             border_width=1,
             border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
+            fg_color="#ffffff",
             text_color=_CLR["text"],
             placeholder_text_color=_CLR["text_placeholder"],
             font=ctk.CTkFont(size=13),
@@ -2459,7 +2459,7 @@ class TranscribeFileTab:
                 font=ctk.CTkFont(size=13),
                 fg_color="transparent",
                 text_color=_CLR["text_secondary"],
-                hover_color="#e0e7ff",
+                hover_color="#eef2fb",
                 command=lambda v=val: self._select_engine(v),
             )
             btn.pack(side="left", fill="x", expand=True, padx=3, pady=3)
@@ -2518,7 +2518,7 @@ class TranscribeFileTab:
             border_width=1,
             border_color=_CLR["card_border"],
             text_color=_CLR["text"],
-            hover_color="#e0e7ff",
+            hover_color="#eef2fb",
             command=self._stop,
             state="disabled",
         )
@@ -2549,7 +2549,7 @@ class TranscribeFileTab:
             corner_radius=10,
             border_width=1,
             border_color=_CLR["card_border"],
-            fg_color="#f8fafc",
+            fg_color="#ffffff",
             font=ctk.CTkFont(family="SF Mono", size=12),
             text_color=_CLR["text"],
             wrap="word",
@@ -2574,7 +2574,7 @@ class TranscribeFileTab:
                 btn.configure(
                     fg_color="transparent",
                     text_color=_CLR["text_secondary"],
-                    hover_color="#e0e7ff",
+                    hover_color="#eef2fb",
                 )
         if value == "gemini":
             self._engine_hint.configure(
@@ -2919,7 +2919,7 @@ class MeetingWizard(ctk.CTkToplevel):
         self._back_btn = ctk.CTkButton(
             footer, text="← Tilbage", width=110, height=40, corner_radius=10,
             fg_color="transparent", border_width=1, border_color=_CLR["card_border"],
-            text_color=_CLR["text"], hover_color="#e0e7ff", font=ctk.CTkFont(size=14),
+            text_color=_CLR["text"], hover_color="#eef2fb", font=ctk.CTkFont(size=14),
             command=self._prev)
         self._back_btn.pack(side="left")
         self._next_btn = ctk.CTkButton(
@@ -3074,7 +3074,7 @@ class MeetingWizard(ctk.CTkToplevel):
         wrap.pack(fill="x", pady=(8, 0))
         MeetingApp._field_label(wrap, "Mødenavn")
         ctk.CTkEntry(wrap, textvariable=self.app.name_var, height=38, corner_radius=10,
-                     border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
+                     border_width=1, border_color=_CLR["card_border"], fg_color="#ffffff",
                      text_color=_CLR["text"], font=ctk.CTkFont(size=14)).pack(fill="x", pady=(0, 12))
         row = ctk.CTkFrame(wrap, fg_color="transparent")
         row.pack(fill="x", pady=(0, 12))
@@ -3084,13 +3084,13 @@ class MeetingWizard(ctk.CTkToplevel):
         df.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         MeetingApp._field_label(df, "Dato")
         ctk.CTkEntry(df, textvariable=self.app.date_var, height=38, corner_radius=10,
-                     border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
+                     border_width=1, border_color=_CLR["card_border"], fg_color="#ffffff",
                      text_color=_CLR["text"], font=ctk.CTkFont(size=14)).pack(fill="x")
         af = ctk.CTkFrame(row, fg_color="transparent")
         af.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
         MeetingApp._field_label(af, "Deltagere (komma-adskilt)")
         ctk.CTkEntry(af, textvariable=self.app.attendees_var, height=38, corner_radius=10,
-                     border_width=1, border_color=_CLR["card_border"], fg_color="#f8fafc",
+                     border_width=1, border_color=_CLR["card_border"], fg_color="#ffffff",
                      text_color=_CLR["text"], font=ctk.CTkFont(size=14)).pack(fill="x")
         ctk.CTkLabel(wrap, text="Navnet bruges som mappenavn for mødet.",
                      font=ctk.CTkFont(size=11), text_color=_CLR["text_secondary"],
@@ -3204,7 +3204,7 @@ class MiniHUD(ctk.CTkToplevel):
             inner, text="⤢", width=40, height=40, corner_radius=12,
             font=ctk.CTkFont(size=16), fg_color="transparent", border_width=1,
             border_color=_CLR["card_border"], text_color=_CLR["text"],
-            hover_color="#e0e7ff", command=self.app._restore_from_hud).pack(side="right")
+            hover_color="#eef2fb", command=self.app._restore_from_hud).pack(side="right")
 
         # Træk hvor som helst på pillen for at flytte HUD'en.
         for w in (pill, inner, mid, self._caption, self._timer, self._name, self._icon):
@@ -3339,7 +3339,7 @@ class HistorikTab:
         ctk.CTkButton(
             head, text="Opdater", width=90, height=32, corner_radius=10,
             fg_color="transparent", border_width=1, border_color=_CLR["card_border"],
-            text_color=_CLR["text"], hover_color="#e0e7ff",
+            text_color=_CLR["text"], hover_color="#eef2fb",
             command=self.refresh).pack(side="right")
         ctk.CTkLabel(
             self._outer, text="Tidligere møder i din mødemappe — åbn eller kopiér referatet.",
@@ -3427,7 +3427,7 @@ class HistorikTab:
                 fg_color=(_CLR["accent"] if primary else "transparent"),
                 border_width=(0 if primary else 1), border_color=_CLR["card_border"],
                 text_color=("#ffffff" if primary else _CLR["text"]),
-                hover_color=(_CLR["accent_hover"] if primary else "#e0e7ff"),
+                hover_color=(_CLR["accent_hover"] if primary else "#eef2fb"),
                 command=cmd)
             if not enabled:
                 b.configure(state="disabled", text_color=_CLR["text_secondary"])
