@@ -135,20 +135,28 @@ MEETINGS_DIR = Path(
 # ---------------------------------------------------------------------------
 # These are used throughout for a consistent frosted-glass look.
 _CLR = {
-    "bg":            "#e8eef6",   # window background - slightly deeper for glass contrast
-    "card":          "#f8fafd",   # card surface - near-white, feels translucent
-    "card_border":   "#c8d5e4",   # slightly more visible border for glass edge
-    "accent":        "#3b82f6",   # blue accent (buttons, highlights)
-    "accent_hover":  "#2563eb",
-    "text":          "#1e293b",   # primary text
-    "text_secondary":"#334155",   # secondary/muted text (slate-700 — mørkere for bedre kontrast)
-    "text_placeholder":"#475569", # placeholder i entries — lysere end labels, stadig læsbar
-    "rec_idle":      "#ef4444",   # red dot when idle
-    "rec_active":    "#dc2626",   # deeper red when recording
-    "rec_ring":      "#fecaca",   # light red ring around button
-    "stop_blue":     "#3b82f6",   # blue for stop state
-    "stop_hover":    "#2563eb",
-    "success":       "#22c55e",
+    # — Ny "Sidebar App"-palet —
+    "sidebar_bg":          "#1b2a4a",  # mørk marineblå sidebar
+    "sidebar_icon":        "#7f92b8",  # inaktivt sidebar-ikon
+    "sidebar_icon_active": "#ffffff",  # aktivt sidebar-ikon
+    "bg":                  "#f7f8fa",  # lys arbejdsflade
+    "card":                "#ffffff",  # hvide kort
+    "card_border":         "#e6e8ec",
+    "accent":              "#3b6fe0",  # blå accent
+    "accent_hover":        "#2f5ec9",
+    "text":                "#1b2a4a",  # primær tekst
+    "text_secondary":      "#5b6474",  # sekundær tekst
+    "text_placeholder":    "#8a93a3",
+    # — Optage-tilstand —
+    "rec_idle":            "#e5382b",  # rød rec-prik (idle)
+    "rec_active":          "#e5382b",  # rød (optager)
+    "rec_ring":            "#f6b6b0",  # lys rød ring (blink)
+    "stop_blue":           "#1b2a4a",
+    "stop_hover":          "#0f1c34",
+    "success":             "#2e7d5b",
+    # — Historik-badges —
+    "badge_ok":            "#2e7d5b", "badge_ok_bg":   "#e3f5ec",
+    "badge_busy":          "#8a6d00", "badge_busy_bg": "#fbf3d8",
 }
 
 
