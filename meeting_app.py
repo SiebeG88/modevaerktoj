@@ -523,8 +523,6 @@ class MeetingApp:
 
         # Optag-viewet er en ren OPTAGE-skærm; al per-møde-opsætning sker i guiden.
         self._build_record_screen(self._views["optag"])
-        # Vedvarende/avancerede indstillinger får deres eget view.
-        self._build_settings_tab(self._views["indstillinger"])
 
         # Transkribér fil-viewet.
         self._transcribe_tab = TranscribeFileTab(self._views["transkriber"])
@@ -532,17 +530,31 @@ class MeetingApp:
         # Historik-viewet.
         self._historik_tab = HistorikTab(self._views["historik"], self)
 
-        # Ordliste + Mødetyper bygges i skjulte frames (flyttes ind i
-        # Indstillinger i et senere trin). Ikke pakket = ikke synlige endnu.
-        self._extra_frames = {
-            "ordliste": ctk.CTkFrame(self._content, fg_color=_CLR["bg"]),
-            "modetyper": ctk.CTkFrame(self._content, fg_color=_CLR["bg"]),
+        # Indstillinger-viewet: en sektions-vælger øverst + tre sektioner
+        # (Generelt / Ordliste / Mødetyper). Sidebar forbliver enkel.
+        settings_view = self._views["indstillinger"]
+        seg = ctk.CTkSegmentedButton(
+            settings_view, values=["Generelt", "Ordliste", "Mødetyper"],
+            fg_color=_CLR["card"], selected_color=_CLR["accent"],
+            selected_hover_color=_CLR["accent_hover"],
+            unselected_color=_CLR["card"], unselected_hover_color=_CLR["card_border"],
+            text_color=_CLR["text"], command=self._on_settings_seg)
+        seg.pack(fill="x", padx=24, pady=(18, 8))
+        self._settings_seg = seg
+        self._settings_sections = {
+            "generelt": ctk.CTkFrame(settings_view, fg_color=_CLR["bg"]),
+            "ordliste": ctk.CTkFrame(settings_view, fg_color=_CLR["bg"]),
+            "modetyper": ctk.CTkFrame(settings_view, fg_color=_CLR["bg"]),
         }
-        self._vocab_tab = VocabularyTab(self._extra_frames["ordliste"])
+        self._settings_current = None
+        self._build_settings_tab(self._settings_sections["generelt"])
+        self._vocab_tab = VocabularyTab(self._settings_sections["ordliste"])
         self._types_tab = MeetingTypesTab(
-            self._extra_frames["modetyper"],
+            self._settings_sections["modetyper"],
             on_change=self._on_meeting_types_changed,
         )
+        seg.set("Generelt")
+        self._show_settings_section("generelt")
 
         # Global musehjul-scroll: ét bind_all-handler der finder den
         # scrollbare canvas under markøren og scroller den. Robust mod at
@@ -569,6 +581,22 @@ class MeetingApp:
                 self._historik_tab.refresh()
             except Exception:
                 pass
+
+    def _on_settings_seg(self, value: str) -> None:
+        self._show_settings_section(
+            {"Generelt": "generelt", "Ordliste": "ordliste",
+             "Mødetyper": "modetyper"}.get(value, "generelt"))
+
+    def _show_settings_section(self, name: str) -> None:
+        """Vis én sektion i Indstillinger, skjul resten."""
+        if name not in self._settings_sections:
+            return
+        for n, frame in self._settings_sections.items():
+            if n == name:
+                frame.pack(fill="both", expand=True)
+            else:
+                frame.pack_forget()
+        self._settings_current = name
 
     # ------------------------------------------------------------------
     # Small helpers

@@ -48,3 +48,15 @@ def test_show_view_switches_visibility(app):
 def test_no_tabview_attribute(app):
     # CTkTabview er fjernet til fordel for sidebar.
     assert not hasattr(app, "_tabview")
+
+
+def test_sidebar_has_four_items(app):
+    assert set(app._views) == {"optag", "transkriber", "historik", "indstillinger"}
+
+
+def test_settings_sections(app):
+    app._show_view("indstillinger")
+    for sec in ("generelt", "ordliste", "modetyper"):
+        app._show_settings_section(sec)
+        assert app._settings_current == sec
+        assert app._settings_sections[sec].winfo_manager() != ""
