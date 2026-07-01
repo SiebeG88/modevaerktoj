@@ -419,7 +419,9 @@ class MeetingApp:
     def __init__(self, root: ctk.CTk):
         self.root = root
         self.root.title("Modevarktoej")
-        self.root.geometry("800x720")
+        # "Restore"-størrelse når vinduet gendannes fra maksimeret — rummelig.
+        self.root.geometry("1100x820")
+        self.root.minsize(880, 680)
 
         # State
         self.recording = False
@@ -436,9 +438,17 @@ class MeetingApp:
         self._refresh_devices()
         self._set_default_folder()
 
-        # Centre window on screen
+        # Centre window on screen, og åbn derefter maksimeret — brugeren
+        # maksimerede ellers manuelt hver gang.
         self.root.update_idletasks()
         self._centre_window()
+        try:
+            self.root.state("zoomed")          # Windows/Linux
+        except Exception:
+            try:
+                self.root.attributes("-zoomed", True)
+            except Exception:
+                pass
 
         # Poll UI queue fra baggrundstråde
         self.root.after(100, self._drain_ui_queue)
@@ -448,8 +458,10 @@ class MeetingApp:
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # Wizarden åbnes via "Ny optagelse"-knappen — IKKE automatisk ved opstart
-        # (et auto-pop-up Toplevel fik appen til at "åbne to gange").
+        # Åbn wizarden automatisk ved opstart, så brugeren guides fra start.
+        # Køres via after() så hovedvinduet er tegnet og centreret først —
+        # ellers "blinker" appen som om den åbner to gange.
+        self.root.after(400, lambda: self._open_wizard(0))
 
         # Vis mini-HUD når vinduet minimeres mens der optages/transkriberes.
         self.root.bind("<Unmap>", self._on_minimize)
@@ -669,68 +681,115 @@ class MeetingApp:
             font=ctk.CTkFont(size=14, weight="bold"),
             command=self._toggle_recording).pack(pady=(0, 8))
 
-        # — Konfig-oversigtskort
+        # — Konfig-oversigtskort (chip-baseret, 2 kolonner)
         card = ctk.CTkFrame(
             outer, fg_color=_CLR["card"], corner_radius=16,
             border_width=1, border_color=_CLR["card_border"],
         )
         card.pack(fill="x", padx=24, pady=(16, 0))
         self._idle_card = card
+        self._sum_labels = {}
 
         card_head = ctk.CTkFrame(card, fg_color="transparent")
-        card_head.pack(fill="x", padx=20, pady=(16, 8))
+        card_head.pack(fill="x", padx=20, pady=(16, 4))
+        head_txt = ctk.CTkFrame(card_head, fg_color="transparent")
+        head_txt.pack(side="left", anchor="w")
         ctk.CTkLabel(
-            card_head, text="Klar til optagelse",
+            head_txt, text="Klar til optagelse",
             font=ctk.CTkFont(family="SF Pro Display", size=16, weight="bold"),
-            text_color=_CLR["text"],
-        ).pack(side="left")
+            text_color=_CLR["text"], anchor="w",
+        ).pack(anchor="w")
+        # Mødets navn som diskret undertitel (opdateres af _refresh_summary).
+        name_lbl = ctk.CTkLabel(
+            head_txt, text="—", anchor="w",
+            font=ctk.CTkFont(size=13), text_color=_CLR["text_secondary"],
+        )
+        name_lbl.pack(anchor="w")
+        self._sum_labels["name"] = name_lbl
         ctk.CTkButton(
-            card_head, text="Ny optagelse", height=32, corner_radius=8,
+            card_head, text="+ Ny optagelse", height=32, corner_radius=8,
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color=_CLR["accent"], hover_color=_CLR["accent_hover"],
             command=lambda: self._open_wizard(0),
         ).pack(side="right")
 
-        rows = ctk.CTkFrame(card, fg_color="transparent")
-        rows.pack(fill="x", padx=20, pady=(0, 12))
-        self._sum_labels = {}
+        # 2-kolonne chip-gitter — hver chip er klikbar og hopper til rette trin.
+        grid = ctk.CTkFrame(card, fg_color="transparent")
+        grid.pack(fill="x", padx=20, pady=(10, 4))
+        grid.grid_columnconfigure(0, weight=1, uniform="chip")
+        grid.grid_columnconfigure(1, weight=1, uniform="chip")
 
-        def _row(key, caption, on_change):
-            r = ctk.CTkFrame(rows, fg_color="transparent")
-            r.pack(fill="x", pady=3)
-            ctk.CTkLabel(
-                r, text=caption, width=92, anchor="w",
-                font=ctk.CTkFont(size=12), text_color=_CLR["text_secondary"],
-            ).pack(side="left")
+        def _chip(key, icon, on_click, r, c):
+            chip = ctk.CTkFrame(
+                grid, fg_color=_CLR["bg"], corner_radius=10,
+                border_width=1, border_color=_CLR["card_border"],
+            )
+            chip.grid(row=r, column=c, sticky="ew",
+                      padx=(0, 6) if c == 0 else (6, 0), pady=4)
+            ic = ctk.CTkLabel(
+                chip, text=icon, width=22,
+                font=ctk.CTkFont(family="Segoe UI Emoji", size=15),
+            )
+            ic.pack(side="left", padx=(10, 2), pady=9)
             val = ctk.CTkLabel(
-                r, text="—", anchor="w", justify="left",
+                chip, text="—", anchor="w", justify="left",
                 font=ctk.CTkFont(size=13, weight="bold"), text_color=_CLR["text"],
             )
-            val.pack(side="left", fill="x", expand=True, padx=(6, 6))
-            ctk.CTkButton(
-                r, text="Skift", width=54, height=26, corner_radius=7,
-                font=ctk.CTkFont(size=12), fg_color="transparent",
-                border_width=1, border_color=_CLR["card_border"],
-                text_color=_CLR["accent"], hover_color="#eef2fb",
-                command=on_change,
-            ).pack(side="right")
+            val.pack(side="left", fill="x", expand=True, padx=(2, 10), pady=9)
+
+            def _still_inside():
+                # Peger musen stadig et sted inde i chippen (eller et af dens
+                # børn)? Bruges til at undgå flimmer når man krydser fra chip
+                # til underetiket — <Leave> fyrer ellers falsk.
+                x, y = chip.winfo_pointerxy()
+                w = chip.winfo_containing(x, y)
+                while w is not None:
+                    if w == chip:
+                        return True
+                    w = w.master
+                return False
+
+            def _enter(_e):
+                chip.configure(border_color=_CLR["accent"])
+
+            def _leave(_e):
+                if not _still_inside():
+                    chip.configure(border_color=_CLR["card_border"])
+
+            for w in (chip, ic, val):
+                try:
+                    w.configure(cursor="hand2")
+                except Exception:
+                    pass
+                w.bind("<Button-1>", lambda e, f=on_click: f())
+                w.bind("<Enter>", _enter)
+                w.bind("<Leave>", _leave)
             self._sum_labels[key] = val
 
-        _row("form", "Mødeform", lambda: self._open_wizard(0))
-        _row("type", "Mødetype", lambda: self._open_wizard(1))
-        _row("name", "Navn", lambda: self._open_wizard(2))
-        _row("attendees", "Deltagere", lambda: self._open_wizard(2))
-        _row("engine", "Motor", lambda: self._open_wizard(3))
-        _row("mic", "Mikrofon", lambda: self._show_view("indstillinger"))
-        _row("folder", "Mappe", lambda: self._show_view("indstillinger"))
+        _chip("form", "🗓", lambda: self._open_wizard(0), 0, 0)
+        _chip("type", "🏷", lambda: self._open_wizard(1), 0, 1)
+        _chip("attendees", "👥", lambda: self._open_wizard(2), 1, 0)
+        _chip("engine", "⚙", lambda: self._open_wizard(3), 1, 1)
+        _chip("mic", "🎙", lambda: self._show_view("indstillinger"), 2, 0)
+        _chip("folder", "📁", lambda: self._show_view("indstillinger"), 2, 1)
 
+        # Bundlinje: referat-checkbox + samlet Redigér-knap.
+        foot = ctk.CTkFrame(card, fg_color="transparent")
+        foot.pack(fill="x", padx=20, pady=(8, 16))
         ctk.CTkCheckBox(
-            card, text="Generér referat efter optagelse",
+            foot, text="Generér referat efter optagelse",
             variable=self.minutes_var, font=ctk.CTkFont(size=13),
             text_color=_CLR["text"], fg_color=_CLR["accent"],
             hover_color=_CLR["accent_hover"], corner_radius=6,
             border_width=2, border_color=_CLR["card_border"],
-        ).pack(anchor="w", padx=20, pady=(0, 16))
+        ).pack(side="left")
+        ctk.CTkButton(
+            foot, text="✎  Redigér", width=96, height=30, corner_radius=8,
+            font=ctk.CTkFont(size=12), fg_color="transparent",
+            border_width=1, border_color=_CLR["card_border"],
+            text_color=_CLR["accent"], hover_color="#eef2fb",
+            command=lambda: self._open_wizard(0),
+        ).pack(side="right")
 
         # — Hero record-knap + timer i den FASTE bundlinje (altid synlig)
         self.hero_btn = HeroButton(bottom_bar, command=self._toggle_recording, bg=_CLR["bg"])
@@ -998,6 +1057,16 @@ class MeetingApp:
         _set("engine", engine_map.get(self.engine_var.get(), self.engine_var.get()))
         _set("mic", self._selected_device_name())
         _set("folder", self.folder_var.get())
+
+    def _clear_meeting_fields(self):
+        """Nulstil de mødespecifikke felter (mødeform, type, navn, deltagere),
+        så opsummeringen står tom når wizarden springes over. Tekniske
+        indstillinger (motor, mikrofon, mappe) bevares."""
+        self.meeting_form_var.set("")
+        self.type_var.set("")
+        self.name_var.set("")
+        self.attendees_var.set("")
+        self._refresh_summary()
 
     def _open_wizard(self, start_step=0):
         if self.recording or self.transcribing:
@@ -2980,6 +3049,16 @@ class MeetingWizard(ctk.CTkToplevel):
 
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=28, pady=(24, 8))
+        # "Spring over" øverst til højre — hop direkte til opsummeringen med
+        # de sidst valgte værdier, uden at gå gennem trinnene.
+        skiprow = ctk.CTkFrame(top, fg_color="transparent")
+        skiprow.pack(fill="x")
+        ctk.CTkButton(
+            skiprow, text="Spring over →", width=110, height=26, corner_radius=8,
+            fg_color="transparent", hover_color="#eef2fb",
+            text_color=_CLR["text_secondary"], font=ctk.CTkFont(size=12),
+            command=self._skip,
+        ).pack(side="right")
         # Progress-bar: ét segment pr. trin.
         segbar = ctk.CTkFrame(top, fg_color="transparent")
         segbar.pack(fill="x", pady=(0, 8))
@@ -3027,7 +3106,8 @@ class MeetingWizard(ctk.CTkToplevel):
             pass
 
     def _on_close(self):
-        # Spring over: behold nuværende/sidste valg, gå til optage-skærmen.
+        # Luk med X: behold nuværende/sidste valg (fx ved redigering), gå
+        # blot tilbage til opsummeringen.
         self.app._refresh_summary()
         self.app._wizard = None
         try:
@@ -3035,6 +3115,12 @@ class MeetingWizard(ctk.CTkToplevel):
         except Exception:
             pass
         self.destroy()
+
+    def _skip(self):
+        # "Spring over": ryd de mødespecifikke felter, så opsummeringen står
+        # tom i stedet for at vise gamle/standardværdier.
+        self.app._clear_meeting_fields()
+        self._on_close()
 
     # — Navigation -----------------------------------------------------
     def go_to(self, step: int):
@@ -3049,7 +3135,7 @@ class MeetingWizard(ctk.CTkToplevel):
         builders[self._step]()
         self._back_btn.configure(state="normal" if self._step > 0 else "disabled")
         self._next_btn.configure(
-            text="Start optagelse" if self._step == len(self.STEPS) - 1 else "Næste →")
+            text="Færdig ✓" if self._step == len(self.STEPS) - 1 else "Næste →")
 
     @staticmethod
     def _draw_check(canvas, on):
@@ -3088,7 +3174,8 @@ class MeetingWizard(ctk.CTkToplevel):
         except Exception:
             pass
         self.destroy()
-        self.app._toggle_recording()
+        # Efter wizarden vises opsummeringen — optagelsen startes først når
+        # brugeren trykker på den store knap (ikke automatisk længere).
 
     # — Trin 1: Mødeform ----------------------------------------------
     def _build_form(self):
@@ -3709,8 +3796,11 @@ def main():
         except Exception:
             pass
 
-    # Semi-transparent vindue (Liquid Glass effekt)
-    root.attributes("-alpha", 0.92)
+    # Semi-transparent vindue (Liquid Glass effekt) — kun på macOS.
+    # På Windows lader gennemsigtigheden skrivebordstapetet skinne igennem,
+    # så dér holder vi vinduet helt opakt.
+    if sys.platform == "darwin":
+        root.attributes("-alpha", 0.92)
 
     app = MeetingApp(root)
 

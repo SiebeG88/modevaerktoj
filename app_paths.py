@@ -41,26 +41,67 @@ def user_config_dir() -> Path:
 
 def resolve_binary(name: str) -> str:
     """Sti til en hjælpe-binær ('ffmpeg'/'ffprobe').
-    1) bundlet i app_dir() (med .exe-suffix på Windows) hvis den findes,
-    2) ellers navnet selv (PATH-opslag som hidtil)."""
+
+    Leder flere steder, fordi PyInstaller 6's one-dir-bundle lægger bundlede
+    binærer i undermappen '_internal' (og udstiller den via sys._MEIPASS) —
+    IKKE ved siden af exe'en som i ældre versioner:
+      1) sys._MEIPASS (frosset one-dir data-mappe),
+      2) app_dir() (ved siden af exe/script),
+      3) app_dir()/_internal (one-dir layout),
+      4) ellers navnet selv (PATH-opslag som hidtil)."""
     suffix = ".exe" if sys.platform == "win32" else ""
-    candidate = app_dir() / f"{name}{suffix}"
-    if candidate.exists():
-        return str(candidate)
+    fname = f"{name}{suffix}"
+    search_dirs = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        search_dirs.append(Path(meipass))
+    base = app_dir()
+    search_dirs.append(base)
+    search_dirs.append(base / "_internal")
+    for d in search_dirs:
+        candidate = d / fname
+        if candidate.exists():
+            return str(candidate)
     return name
 
 
+def _resource_dirs() -> list[Path]:
+    """Mapper hvor bundlede read-only ressourcer kan ligge — samme logik som
+    resolve_binary: PyInstaller 6 lægger dem i '_internal' (sys._MEIPASS), ikke
+    ved siden af exe'en."""
+    dirs: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        dirs.append(Path(meipass))
+    base = app_dir()
+    dirs.append(base)
+    dirs.append(base / "_internal")
+    return dirs
+
+
+def resolve_resource(name: str) -> Path | None:
+    """Find en bundlet ressource-fil ('*.default.json' m.v.) i bundle-mapperne.
+    Returnerer stien hvis fundet, ellers None."""
+    for d in _resource_dirs():
+        cand = d / name
+        if cand.exists():
+            return cand
+    return None
+
+
 def ensure_user_config(template_names: list[str]) -> None:
-    """Kopiér read-only template-filer (fx '*.default.json') fra app_dir() til
-    user_config_dir() hvis de mangler. No-op når de to mapper er ens (macOS)."""
-    src_dir = app_dir()
+    """Kopiér read-only template-filer (fx '*.default.json') fra bundle-mappen
+    til user_config_dir() hvis de mangler. No-op når kilde og mål er ens (macOS,
+    hvor ressourcen ligger i selve user_config_dir())."""
     dst_dir = user_config_dir()
-    if src_dir == dst_dir:
-        return
     for name in template_names:
-        src = src_dir / name
+        src = resolve_resource(name)
+        if src is None:
+            continue
         dst = dst_dir / name
-        if src.exists() and not dst.exists():
+        if src.resolve() == dst.resolve():
+            continue  # macOS: kilde == mål, intet at kopiere
+        if not dst.exists():
             try:
                 shutil.copy2(src, dst)
             except OSError as e:

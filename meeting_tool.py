@@ -72,6 +72,12 @@ def seed_user_config():
 FFMPEG = app_paths.resolve_binary("ffmpeg")
 FFPROBE = app_paths.resolve_binary("ffprobe")
 
+# På det frosne Windows-GUI-bygge (console=False) har processen intet
+# konsolvindue; hver ffmpeg/ffprobe-underproces ville ellers blinke sit eget
+# sorte konsolvindue op. CREATE_NO_WINDOW undertrykker det. 0 (ingen effekt) på
+# macOS/Linux, hvor flaget ikke findes (getattr giver 0 = ingen effekt).
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 # ---------------------------------------------------------------------------
 # Platform-detektion
 # ---------------------------------------------------------------------------
@@ -341,14 +347,15 @@ def measure_input_level_db(device_id, duration: float = 1.0):
     None hvis niveauet ikke kunne måles (fx ffmpeg-fejl).
     """
     cmd = [
-        "ffmpeg", "-hide_banner",
+        FFMPEG, "-hide_banner",
         *build_ffmpeg_input(device_id),
         "-t", str(duration),
         "-af", "volumedetect",
         "-f", "null", "-",
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                                creationflags=_NO_WINDOW)
     except Exception:
         return None
     m = re.search(r"max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB", result.stderr or "")
@@ -435,7 +442,9 @@ def record_meeting(output_path: Path, device_id: int | str = 1) -> Path:
     ]
 
     # stdin=PIPE: send 'q' for paent stop (SIGTERM ignoreres af avfoundation)
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            creationflags=_NO_WINDOW)
 
     def stop_recording(signum, frame):  # pragma: no cover
         try:
@@ -870,7 +879,9 @@ def record_and_transcribe_live(
     # SIGTERM/SIGINT ignoreres ofte af avfoundation-input paa macOS,
     # hvilket laser hele optagelsen. 'q' til stdin er ffmpegs kanoniske
     # quit-signal og flusher den igangvaerende segment-fil korrekt.
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            creationflags=_NO_WINDOW)
 
     def graceful_stop():
         """Stop ffmpeg paent via stdin 'q', med fallback til terminate/kill."""
@@ -978,6 +989,8 @@ def record_and_transcribe_live(
             "-loglevel", "warning",
         ],
         check=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=_NO_WINDOW,
     )
     size_mb = master_path.stat().st_size / (1024 * 1024)
     _status(f"Master WAV gemt: {master_path.name} ({size_mb:.1f} MB)")
@@ -1091,7 +1104,9 @@ def record_then_transcribe_gemini(
         str(master_path),
         "-y", "-loglevel", "warning",
     ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            creationflags=_NO_WINDOW)
 
     def graceful_stop():
         try:
@@ -1179,7 +1194,9 @@ def convert_to_wav(input_path: Path, output_path: Path) -> Path:
         "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
         str(output_path), "-y", "-loglevel", "warning"
     ]
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   creationflags=_NO_WINDOW)
     print("Konvertering faerdig.", flush=True)
     return output_path
 
@@ -1355,6 +1372,7 @@ def _ffprobe_duration(wav_path: Path) -> float:
             str(wav_path),
         ],
         capture_output=True, text=True, check=True,
+        creationflags=_NO_WINDOW,
     )
     return float(result.stdout.strip())
 
@@ -1375,6 +1393,8 @@ def _split_audio_for_gemini(
             pattern, "-y", "-loglevel", "warning",
         ],
         check=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=_NO_WINDOW,
     )
     return sorted(out_dir.glob("chunk_*.wav"))
 
@@ -1451,7 +1471,14 @@ def _gemini_transcribe_single(
         )
         if tmp_link.exists() or tmp_link.is_symlink():
             tmp_link.unlink()
-        tmp_link.symlink_to(wav_path.resolve())
+        try:
+            tmp_link.symlink_to(wav_path.resolve())
+        except OSError:
+            # Windows uden symlink-privilegie (WinError 1314: "A required
+            # privilege is not held") — fald tilbage til en almindelig kopi.
+            # Danske mødenavne (fx "Driftledelsesmøde") er ikke-ASCII, så denne
+            # gren rammes ved helt normal brug på Windows.
+            shutil.copy2(wav_path, tmp_link)
         upload_path = tmp_link
 
     try:
@@ -2013,6 +2040,7 @@ def write_pdf_from_markdown(md_path: Path, pdf_path: Path) -> Path | None:
             check=True,
             capture_output=True,
             env=env,
+            creationflags=_NO_WINDOW,
         )
         return pdf_path
     except FileNotFoundError:
