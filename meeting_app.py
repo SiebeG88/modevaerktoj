@@ -3395,6 +3395,18 @@ def _open_path(path, on_error=None):
             print(msg, file=sys.stderr)
 
 
+def historik_badge(status: str):
+    """Map en møde-status til (label, tekstfarve, baggrundsfarve).
+
+    Gyldige statusser: 'klar' (referat findes), 'i_gang' (transkriberer),
+    '' (ingen badge)."""
+    if status == "klar":
+        return ("Referat klar", _CLR["badge_ok"], _CLR["badge_ok_bg"])
+    if status == "i_gang":
+        return ("Transkriberer…", _CLR["badge_busy"], _CLR["badge_busy_bg"])
+    return ("", "", "")
+
+
 class HistorikTab:
     """Historik-fane: lister tidligere møder (undermapper i mødemappen) og giver
     hurtige handlinger — åbn mappe, åbn referat, kopiér referat. Læser kun fra
@@ -3502,10 +3514,13 @@ class HistorikTab:
             top, text=folder.name, anchor="w",
             font=ctk.CTkFont(size=15, weight="bold"),
             text_color=_CLR["text"]).pack(side="left")
-        ctk.CTkLabel(
-            top, text=("Referat ✓" if referat else "Intet referat"), anchor="e",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color=(_CLR["success"] if referat else _CLR["text_secondary"])).pack(side="right")
+        # Status-badge: referat på disken → "Referat klar"; ellers ingen badge.
+        label, fg, bg = historik_badge("klar" if referat else "")
+        if label:
+            ctk.CTkLabel(
+                top, text=f"  {label}  ", anchor="center", height=22,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=fg, fg_color=bg, corner_radius=10).pack(side="right")
         ctk.CTkLabel(
             inner, text=mtime, anchor="w", font=ctk.CTkFont(size=11),
             text_color=_CLR["text_secondary"]).pack(anchor="w", pady=(2, 8))
