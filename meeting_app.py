@@ -595,6 +595,7 @@ class MeetingApp:
         # Pakkes FØR det scrollbare indhold (side=bottom) så den reserverer pladsen.
         bottom_bar = ctk.CTkFrame(parent, fg_color=_CLR["bg"])
         bottom_bar.pack(side="bottom", fill="x")
+        self._bottom_bar = bottom_bar
 
         outer = ctk.CTkScrollableFrame(
             parent, fg_color=_CLR["bg"],
@@ -616,12 +617,37 @@ class MeetingApp:
             text_color=_CLR["text_secondary"],
         ).pack(anchor="w", pady=(2, 0))
 
+        # — Aktiv-optagelse-panel (skjult i idle; vises mens der optages) —
+        self._active_panel = ctk.CTkFrame(outer, fg_color=_CLR["bg"])
+        self._rec_pill = ctk.CTkLabel(
+            self._active_panel, text="●  OPTAGER",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=_CLR["rec_active"])
+        self._rec_pill.pack(pady=(28, 6))
+        self._big_timer = ctk.CTkLabel(
+            self._active_panel, text="00:00:00",
+            font=ctk.CTkFont(family="SF Mono", size=46, weight="bold"),
+            text_color=_CLR["text"])
+        self._rec_subtitle = ctk.CTkLabel(
+            self._active_panel, text="", font=ctk.CTkFont(size=14),
+            text_color=_CLR["text_secondary"])
+        # timer_var oprettes længere nede; kobles på i _build_record_screen-slut.
+        self._big_timer.pack()
+        self._rec_subtitle.pack(pady=(2, 16))
+        ctk.CTkButton(
+            self._active_panel, text="■  Stop & lav referat",
+            height=46, corner_radius=11, fg_color=_CLR["stop_blue"],
+            hover_color=_CLR["stop_hover"], text_color="#ffffff",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=self._toggle_recording).pack(pady=(0, 8))
+
         # — Konfig-oversigtskort
         card = ctk.CTkFrame(
             outer, fg_color=_CLR["card"], corner_radius=16,
             border_width=1, border_color=_CLR["card_border"],
         )
         card.pack(fill="x", padx=24, pady=(16, 0))
+        self._idle_card = card
 
         card_head = ctk.CTkFrame(card, fg_color="transparent")
         card_head.pack(fill="x", padx=20, pady=(16, 8))
@@ -688,6 +714,10 @@ class MeetingApp:
             text_color=_CLR["text"],
         )
         self.timer_label.pack(anchor="center", pady=(2, 10))
+        # Det store timer-tal på aktiv-panelet deler timer_var med bundlinjen.
+        self._big_timer.configure(textvariable=self.timer_var)
+        # Aktiv-panelet er skjult indtil der optages.
+        self._active_panel.pack_forget()
 
         # — Status / log
         log_card = ctk.CTkFrame(
@@ -1621,8 +1651,27 @@ class MeetingApp:
     # UI helpers
     # ------------------------------------------------------------------
 
+    def _active_subtitle_text(self) -> str:
+        """Undertekst under det store timer-tal mens der optages — KUN
+        mødenavnet (aldrig motoren). Falder tilbage til mødetypen hvis navnet
+        er tomt."""
+        return self.name_var.get().strip() or self.type_var.get()
+
+    def _show_recording_state(self, on: bool) -> None:
+        """Skift mellem idle-oversigt og det store aktiv-optage-panel."""
+        if on:
+            self._rec_subtitle.configure(text=self._active_subtitle_text())
+            self._idle_card.pack_forget()
+            self._bottom_bar.pack_forget()   # undgå dobbelt timer/stop
+            self._active_panel.pack(fill="x", padx=24, pady=(4, 8))
+        else:
+            self._active_panel.pack_forget()
+            self._bottom_bar.pack(side="bottom", fill="x")
+            self._idle_card.pack(fill="x", padx=24, pady=(16, 0))
+
     def _set_ui_recording(self, is_recording: bool):
         self.recording = is_recording
+        self._show_recording_state(is_recording)
         self.hero_btn.set_recording(is_recording)
         if is_recording:
             self.timer_label.configure(text_color=_CLR["rec_active"])
