@@ -349,6 +349,45 @@ class HeroButton(ctk.CTkCanvas):
         self._pulse_after_id = self.after(self._PULSE_MS, self._animate_pulse)
 
 
+class Sidebar(ctk.CTkFrame):
+    """Fast venstre-navigation. Kalder on_select(view_name) ved klik.
+
+    Ikonerne er tekst-labels i denne version; tegnede ikoner tilføjes i et
+    senere trin. set_active(name) markerer det aktive punkt."""
+
+    WIDTH = 78
+
+    def __init__(self, master, items, on_select, **kw):
+        super().__init__(master, width=self.WIDTH, corner_radius=0,
+                         fg_color=_CLR["sidebar_bg"], **kw)
+        self.pack_propagate(False)
+        self._on_select = on_select
+        self._buttons = {}
+        # Logo-plads
+        logo = ctk.CTkFrame(self, width=32, height=32, corner_radius=9,
+                            fg_color=_CLR["accent"])
+        logo.pack(pady=(16, 20))
+        logo.pack_propagate(False)
+        for name, label in items:
+            b = ctk.CTkButton(
+                self, text=label, width=self.WIDTH - 16, height=42,
+                corner_radius=10, fg_color="transparent",
+                hover_color="#26365a", text_color=_CLR["sidebar_icon"],
+                font=ctk.CTkFont(size=11),
+                command=lambda n=name: self._on_select(n))
+            b.pack(pady=4, padx=8)
+            self._buttons[name] = b
+
+    def set_active(self, name):
+        for n, b in self._buttons.items():
+            if n == name:
+                b.configure(fg_color="#26365a",
+                            text_color=_CLR["sidebar_icon_active"])
+            else:
+                b.configure(fg_color="transparent",
+                            text_color=_CLR["sidebar_icon"])
+
+
 class MeetingApp:
     def __init__(self, root: ctk.CTk):
         self.root = root
@@ -422,25 +461,22 @@ class MeetingApp:
         # Configure the window background
         self.root.configure(fg_color=_CLR["bg"])
 
-        # Tabview på topniveau: "Optag" + "Ordliste"
-        self._tabview = ctk.CTkTabview(
-            self.root,
-            fg_color=_CLR["bg"],
-            segmented_button_fg_color=_CLR["card"],
-            segmented_button_selected_color=_CLR["accent"],
-            segmented_button_selected_hover_color=_CLR["accent_hover"],
-            segmented_button_unselected_color=_CLR["card"],
-            segmented_button_unselected_hover_color=_CLR["card_border"],
-            text_color=_CLR["text"],
-            command=self._on_tab_change,
-        )
-        self._tabview.pack(fill="both", expand=True, padx=0, pady=0)
-        self._tabview.add("Optag")
-        self._tabview.add("Transkribér fil")
-        self._tabview.add("Ordliste")
-        self._tabview.add("Mødetyper")
-        self._tabview.add("Historik")
-        self._tabview.add("Indstillinger")
+        # Navigations-shell: fast venstre-sidebar + indholdsflade der skifter view.
+        shell = ctk.CTkFrame(self.root, fg_color=_CLR["bg"])
+        shell.pack(fill="both", expand=True)
+
+        items = [("optag", "Optag"), ("transkriber", "Fil"),
+                 ("historik", "Historik"), ("indstillinger", "Indstil.")]
+        self._sidebar = Sidebar(shell, items, self._show_view)
+        self._sidebar.pack(side="left", fill="y")
+
+        self._content = ctk.CTkFrame(shell, fg_color=_CLR["bg"])
+        self._content.pack(side="left", fill="both", expand=True)
+
+        # Ét view = én frame i _content. Vis/skjul via _show_view.
+        self._views = {n: ctk.CTkFrame(self._content, fg_color=_CLR["bg"])
+                       for n, _ in items}
+        self._current_view = None
 
         # Alle delte variabler oprettes FØRST, så hjælpe-metoder (motorvalg,
         # systemlyd, mødetype) virker uanset hvilke widgets der p.t. er bygget.
@@ -458,32 +494,54 @@ class MeetingApp:
         self._engine_buttons = {}
         self._wizard = None
 
-        # Optag-fanen er nu en ren OPTAGE-skærm; al per-møde-opsætning sker i guiden.
-        self._build_record_screen(self._tabview.tab("Optag"))
-        # Vedvarende/avancerede indstillinger får deres egen fane.
-        self._build_settings_tab(self._tabview.tab("Indstillinger"))
+        # Optag-viewet er en ren OPTAGE-skærm; al per-møde-opsætning sker i guiden.
+        self._build_record_screen(self._views["optag"])
+        # Vedvarende/avancerede indstillinger får deres eget view.
+        self._build_settings_tab(self._views["indstillinger"])
 
-        # Byg Transkribér fil-fanen
-        self._transcribe_tab = TranscribeFileTab(
-            self._tabview.tab("Transkribér fil")
-        )
+        # Transkribér fil-viewet.
+        self._transcribe_tab = TranscribeFileTab(self._views["transkriber"])
 
-        # Byg Ordliste-fanen
-        self._vocab_tab = VocabularyTab(self._tabview.tab("Ordliste"))
+        # Historik-viewet.
+        self._historik_tab = HistorikTab(self._views["historik"], self)
 
-        # Byg Mødetyper-fanen — on_change opdaterer dropdowns i de andre faner
+        # Ordliste + Mødetyper bygges i skjulte frames (flyttes ind i
+        # Indstillinger i et senere trin). Ikke pakket = ikke synlige endnu.
+        self._extra_frames = {
+            "ordliste": ctk.CTkFrame(self._content, fg_color=_CLR["bg"]),
+            "modetyper": ctk.CTkFrame(self._content, fg_color=_CLR["bg"]),
+        }
+        self._vocab_tab = VocabularyTab(self._extra_frames["ordliste"])
         self._types_tab = MeetingTypesTab(
-            self._tabview.tab("Mødetyper"),
+            self._extra_frames["modetyper"],
             on_change=self._on_meeting_types_changed,
         )
-
-        # Byg Historik-fanen
-        self._historik_tab = HistorikTab(self._tabview.tab("Historik"), self)
 
         # Global musehjul-scroll: ét bind_all-handler der finder den
         # scrollbare canvas under markøren og scroller den. Robust mod at
         # hjul-events lander på child-widgets (label/frame) i stedet for canvas.
         self._setup_global_scroll()
+
+        # Vis startskærmen.
+        self._show_view("optag")
+
+    def _show_view(self, name: str) -> None:
+        """Vis ét view i indholdsfladen, skjul resten, og markér i sidebar."""
+        if name not in self._views:
+            return
+        for n, frame in self._views.items():
+            if n == name:
+                frame.pack(fill="both", expand=True)
+            else:
+                frame.pack_forget()
+        self._current_view = name
+        self._sidebar.set_active(name)
+        # Genopfrisk Historik når man går ind i det view.
+        if name == "historik" and getattr(self, "_historik_tab", None) is not None:
+            try:
+                self._historik_tab.refresh()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Small helpers
@@ -582,8 +640,8 @@ class MeetingApp:
         _row("name", "Navn", lambda: self._open_wizard(2))
         _row("attendees", "Deltagere", lambda: self._open_wizard(2))
         _row("engine", "Motor", lambda: self._open_wizard(3))
-        _row("mic", "Mikrofon", lambda: self._tabview.set("Indstillinger"))
-        _row("folder", "Mappe", lambda: self._tabview.set("Indstillinger"))
+        _row("mic", "Mikrofon", lambda: self._show_view("indstillinger"))
+        _row("folder", "Mappe", lambda: self._show_view("indstillinger"))
 
         ctk.CTkCheckBox(
             card, text="Generér referat efter optagelse",
@@ -649,12 +707,11 @@ class MeetingApp:
         return None
 
     def _global_wheel(self, event):
-        # Scroll scroll-området i den AKTIVE fane, uanset hvilken child-widget
-        # hjul-eventet ramte (det er det brugeren forventer). winfo_viewable er
-        # upålidelig i CTkTabview, så vi går via den aktive fanes navn.
+        # Scroll scroll-området i det AKTIVE view, uanset hvilken child-widget
+        # hjul-eventet ramte (det er det brugeren forventer).
         try:
-            active = self._tabview.tab(self._tabview.get())
-        except Exception:
+            active = self._views[self._current_view]
+        except (KeyError, AttributeError):
             return
         cv = self._scroll_canvas_in(active)
         if cv is None:
@@ -923,14 +980,6 @@ class MeetingApp:
     # Faneskift + tastatur-genveje
     # ------------------------------------------------------------------
 
-    def _on_tab_change(self, *_):
-        try:
-            if (self._tabview.get() == "Historik"
-                    and getattr(self, "_historik_tab", None) is not None):
-                self._historik_tab.refresh()
-        except Exception:
-            pass
-
     def _on_space_key(self, event=None):
         w = self.root.focus_get()
         try:
@@ -940,7 +989,7 @@ class MeetingApp:
         # Lad mellemrum virke normalt i tekstfelter.
         if cls in ("Entry", "TEntry", "Text"):
             return
-        if self._tabview.get() != "Optag":
+        if self._current_view != "optag":
             return
         self._toggle_recording()
         return "break"
@@ -959,8 +1008,8 @@ class MeetingApp:
                 return
         except Exception:
             pass
-        # Minimer kun fra Optag-fanen, og kun mens der optages/transkriberes.
-        if self._tabview.get() != "Optag":
+        # Minimer kun fra Optag-viewet, og kun mens der optages/transkriberes.
+        if self._current_view != "optag":
             return
         if self.recording or self.transcribing:
             try:
