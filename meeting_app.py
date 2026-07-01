@@ -207,7 +207,7 @@ class HeroButton(ctk.CTkCanvas):
         r = self.SIZE / 2
 
         # Outer soft shadow ring
-        self._oval(cx, cy, r + 4, fill="#e2e8f0", outline="")
+        self._oval(cx, cy, r + 4, fill="#e6e8ec", outline="")
         # Main circle -- white with subtle border
         self._oval(cx, cy, r, fill="#ffffff", outline=_CLR["card_border"], width=1.5)
         # Red dot in centre
@@ -233,7 +233,7 @@ class HeroButton(ctk.CTkCanvas):
         self._oval(cx, cy, r + ring_extra, fill=ring_colour, outline="")
 
         # Main red circle
-        self._oval(cx, cy, r, fill=_CLR["rec_active"], outline="#b91c1c", width=1)
+        self._oval(cx, cy, r, fill=_CLR["rec_active"], outline="#c62828", width=1)
 
         # White stop square
         sq = 20
@@ -310,7 +310,7 @@ class HeroButton(ctk.CTkCanvas):
         r = self.SIZE / 2
 
         # Outer soft shadow ring + hvid hovedcirkel (som idle)
-        self._oval(cx, cy, r + 4, fill="#e2e8f0", outline="")
+        self._oval(cx, cy, r + 4, fill="#e6e8ec", outline="")
         self._oval(cx, cy, r, fill="#ffffff", outline=_CLR["card_border"], width=1.5)
 
         # Roterende spinner-bue
@@ -350,10 +350,8 @@ class HeroButton(ctk.CTkCanvas):
 
 
 class Sidebar(ctk.CTkFrame):
-    """Fast venstre-navigation. Kalder on_select(view_name) ved klik.
-
-    Ikonerne er tekst-labels i denne version; tegnede ikoner tilføjes i et
-    senere trin. set_active(name) markerer det aktive punkt."""
+    """Fast venstre-navigation med tegnede ikoner. Kalder on_select(view_name)
+    ved klik. set_active(name) markerer det aktive punkt (lyst ikon + label)."""
 
     WIDTH = 78
 
@@ -362,30 +360,59 @@ class Sidebar(ctk.CTkFrame):
                          fg_color=_CLR["sidebar_bg"], **kw)
         self.pack_propagate(False)
         self._on_select = on_select
-        self._buttons = {}
+        self._items = {}   # name -> (holder, canvas, label)
         # Logo-plads
         logo = ctk.CTkFrame(self, width=32, height=32, corner_radius=9,
                             fg_color=_CLR["accent"])
-        logo.pack(pady=(16, 20))
+        logo.pack(pady=(16, 18))
         logo.pack_propagate(False)
         for name, label in items:
-            b = ctk.CTkButton(
-                self, text=label, width=self.WIDTH - 16, height=42,
-                corner_radius=10, fg_color="transparent",
-                hover_color="#26365a", text_color=_CLR["sidebar_icon"],
-                font=ctk.CTkFont(size=11),
-                command=lambda n=name: self._on_select(n))
-            b.pack(pady=4, padx=8)
-            self._buttons[name] = b
+            holder = ctk.CTkFrame(self, fg_color="transparent", corner_radius=10)
+            holder.pack(fill="x", padx=8, pady=3)
+            cv = ctk.CTkCanvas(holder, width=28, height=28, highlightthickness=0,
+                               bd=0, bg=self._hex(_CLR["sidebar_bg"]))
+            cv.pack(pady=(6, 0))
+            lbl = ctk.CTkLabel(holder, text=label, font=ctk.CTkFont(size=10),
+                               text_color=_CLR["sidebar_icon"])
+            lbl.pack(pady=(0, 6))
+            for w in (holder, cv, lbl):
+                w.bind("<Button-1>", lambda e, n=name: self._on_select(n))
+                w.configure(cursor="hand2")
+            self._items[name] = (holder, cv, lbl)
+            self._draw_icon(cv, name, _CLR["sidebar_icon"])
+
+    @staticmethod
+    def _hex(colour):
+        """CTkCanvas' bg vil have en almindelig hex-streng (ikke et tema-tuple)."""
+        return colour if isinstance(colour, str) else colour[0]
+
+    @staticmethod
+    def _draw_icon(canvas, name, colour):
+        canvas.delete("all")
+        if name == "optag":            # cirkel + prik (rec)
+            canvas.create_oval(4, 4, 24, 24, outline=colour, width=2)
+            canvas.create_oval(11, 11, 17, 17, fill=colour, outline="")
+        elif name == "transkriber":    # dokument med linjer
+            canvas.create_rectangle(6, 3, 22, 25, outline=colour, width=2)
+            for y in (9, 14, 19):
+                canvas.create_line(9, y, 19, y, fill=colour, width=2)
+        elif name == "historik":       # søjlegraf/akse
+            canvas.create_line(4, 24, 4, 6, fill=colour, width=2)
+            canvas.create_line(4, 24, 24, 24, fill=colour, width=2)
+            canvas.create_line(7, 18, 12, 13, fill=colour, width=2)
+            canvas.create_line(12, 13, 16, 16, fill=colour, width=2)
+            canvas.create_line(16, 16, 23, 8, fill=colour, width=2)
+        elif name == "indstillinger":  # tandhjul (forenklet: to cirkler)
+            canvas.create_oval(6, 6, 22, 22, outline=colour, width=2)
+            canvas.create_oval(11, 11, 17, 17, outline=colour, width=2)
 
     def set_active(self, name):
-        for n, b in self._buttons.items():
-            if n == name:
-                b.configure(fg_color="#26365a",
-                            text_color=_CLR["sidebar_icon_active"])
-            else:
-                b.configure(fg_color="transparent",
-                            text_color=_CLR["sidebar_icon"])
+        for n, (holder, cv, lbl) in self._items.items():
+            active = (n == name)
+            colour = _CLR["sidebar_icon_active"] if active else _CLR["sidebar_icon"]
+            holder.configure(fg_color="#26365a" if active else "transparent")
+            lbl.configure(text_color=colour)
+            self._draw_icon(cv, n, colour)
 
 
 class MeetingApp:
