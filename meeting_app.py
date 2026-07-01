@@ -3788,13 +3788,22 @@ def main():
     if _needs_setup():
         _first_run_setup(root)   # modal; kan springes over (Hviske virker uden nøgle)
 
-    # Set window icon if .icns exists in app bundle
-    icns_path = TOOL_DIR / "Mødeværktøj.app" / "Contents" / "Resources" / "AppIcon.icns"
-    if icns_path.exists():
-        try:
-            root.iconbitmap(str(icns_path))
-        except Exception:
-            pass
+    # Vinduesikon: .ico på Windows (iconbitmap kræver .ico), .icns på macOS.
+    if sys.platform == "win32":
+        import app_paths
+        ico = app_paths.resolve_resource("AppIcon.ico")
+        if ico is not None:
+            try:
+                root.iconbitmap(str(ico))
+            except Exception:
+                pass
+    else:
+        icns_path = TOOL_DIR / "Mødeværktøj.app" / "Contents" / "Resources" / "AppIcon.icns"
+        if icns_path.exists():
+            try:
+                root.iconbitmap(str(icns_path))
+            except Exception:
+                pass
 
     # Semi-transparent vindue (Liquid Glass effekt) — kun på macOS.
     # På Windows lader gennemsigtigheden skrivebordstapetet skinne igennem,

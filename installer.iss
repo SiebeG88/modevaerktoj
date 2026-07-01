@@ -3,7 +3,7 @@
 ; PyInstaller one-folder bundle to %LOCALAPPDATA%\Programs\Mødeværktøj.
 
 #define MyAppName "Mødeværktøj"
-#define MyAppVersion "1.0.6"
+#define MyAppVersion "1.0.7"
 #define MyAppPublisher "TBO"
 #define MyAppExeName "Mødeværktøj.exe"
 #define MyAppURL "https://github.com/SiebeG88/modevaerktoj"
@@ -26,6 +26,7 @@ OutputBaseFilename=Modevaerktoj-Setup-{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=AppIcon.ico
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
