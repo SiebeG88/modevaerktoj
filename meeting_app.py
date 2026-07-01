@@ -2952,8 +2952,19 @@ class MeetingWizard(ctk.CTkToplevel):
 
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(fill="x", padx=28, pady=(24, 8))
+        # Progress-bar: ét segment pr. trin.
+        segbar = ctk.CTkFrame(top, fg_color="transparent")
+        segbar.pack(fill="x", pady=(0, 8))
+        self._seg = []
+        for i in range(len(self.STEPS)):
+            s = ctk.CTkFrame(segbar, height=5, corner_radius=3,
+                             fg_color=_CLR["card_border"])
+            s.pack(side="left", fill="x", expand=True,
+                   padx=(0 if i == 0 else 6, 0))
+            self._seg.append(s)
         self._dots = ctk.CTkLabel(
-            top, text="", font=ctk.CTkFont(size=13), text_color=_CLR["text_secondary"])
+            top, text="", font=ctk.CTkFont(size=12), text_color=_CLR["text_secondary"],
+            anchor="w")
         self._dots.pack(anchor="w")
         self._title = ctk.CTkLabel(
             top, text="", font=ctk.CTkFont(family="SF Pro Display", size=22, weight="bold"),
@@ -3003,13 +3014,31 @@ class MeetingWizard(ctk.CTkToplevel):
         for w in self._body.winfo_children():
             w.destroy()
         builders = (self._build_form, self._build_type, self._build_navn, self._build_motor)
-        dots = "   ".join("●" if i == self._step else "○" for i in range(len(self.STEPS)))
-        self._dots.configure(text=f"{dots}     Trin {self._step + 1} af {len(self.STEPS)}")
+        for i, s in enumerate(self._seg):
+            s.configure(fg_color=_CLR["accent"] if i <= self._step else _CLR["card_border"])
+        self._dots.configure(text=f"Trin {self._step + 1} af {len(self.STEPS)}")
         self._title.configure(text=self.TITLES[self._step])
         builders[self._step]()
         self._back_btn.configure(state="normal" if self._step > 0 else "disabled")
         self._next_btn.configure(
-            text="Start optagelse  ●" if self._step == len(self.STEPS) - 1 else "Næste →")
+            text="Start optagelse" if self._step == len(self.STEPS) - 1 else "Næste →")
+
+    @staticmethod
+    def _draw_check(canvas, on):
+        """Tegn (eller ryd) et blåt flueben i et 20×20-canvas."""
+        canvas.delete("all")
+        if on:
+            canvas.create_oval(1, 1, 19, 19, fill=_CLR["accent"], outline="")
+            canvas.create_line(5, 10, 8, 13, fill="#ffffff", width=2)
+            canvas.create_line(8, 13, 14, 6, fill="#ffffff", width=2)
+
+    def _add_check(self, card_inner):
+        """Tilføj et flueben-canvas til højre i et kort. Returnér canvas'et."""
+        chk = ctk.CTkCanvas(card_inner, width=20, height=20, highlightthickness=0,
+                            bd=0, bg=Sidebar._hex(_CLR["card"]))
+        chk.pack(side="right", padx=(10, 0))
+        self._draw_check(chk, False)
+        return chk
 
     def _prev(self):
         if self._step > 0:
@@ -3043,15 +3072,19 @@ class MeetingWizard(ctk.CTkToplevel):
             ("telefon", "Telefonopkald", "Modparten optages også via systemlyd."),
         )
         self._form_cards = {}
+        self._form_checks = {}
         for val, title, desc in forms:
             c = ctk.CTkFrame(wrap, fg_color=_CLR["card"], corner_radius=14,
                              border_width=2, border_color=_CLR["card_border"])
             c.pack(fill="x", pady=6)
             inner = ctk.CTkFrame(c, fg_color="transparent")
             inner.pack(fill="x", padx=18, pady=14)
-            ctk.CTkLabel(inner, text=title, font=ctk.CTkFont(size=15, weight="bold"),
+            self._form_checks[val] = self._add_check(inner)
+            txt = ctk.CTkFrame(inner, fg_color="transparent")
+            txt.pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(txt, text=title, font=ctk.CTkFont(size=15, weight="bold"),
                          text_color=_CLR["text"], anchor="w").pack(anchor="w")
-            ctk.CTkLabel(inner, text=desc, font=ctk.CTkFont(size=12),
+            ctk.CTkLabel(txt, text=desc, font=ctk.CTkFont(size=12),
                          text_color=_CLR["text_secondary"], anchor="w",
                          justify="left").pack(anchor="w", pady=(2, 0))
             _bind_recursive(c, lambda e, v=val: self._select_form(v))
@@ -3074,12 +3107,14 @@ class MeetingWizard(ctk.CTkToplevel):
         for v, c in self._form_cards.items():
             if c.winfo_exists():
                 c.configure(border_color=_CLR["accent"] if v == val else _CLR["card_border"])
+                self._draw_check(self._form_checks[v], v == val)
 
     # — Trin 2: Mødetype ----------------------------------------------
     def _build_type(self):
         wrap = ctk.CTkScrollableFrame(self._body, fg_color="transparent")
         wrap.pack(fill="both", expand=True)
         self._type_cards = {}
+        self._type_checks = {}
         for key in self._type_keys:
             mt = self.app._meeting_types[key]
             bits = ["grundigt referat" if mt.get("detaljeniveau") == "grundig"
@@ -3094,13 +3129,16 @@ class MeetingWizard(ctk.CTkToplevel):
             c.pack(fill="x", pady=6, padx=2)
             inner = ctk.CTkFrame(c, fg_color="transparent")
             inner.pack(fill="x", padx=18, pady=14)
-            ctk.CTkLabel(inner, text=mt["navn"], font=ctk.CTkFont(size=15, weight="bold"),
+            self._type_checks[key] = self._add_check(inner)
+            txt = ctk.CTkFrame(inner, fg_color="transparent")
+            txt.pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(txt, text=mt["navn"], font=ctk.CTkFont(size=15, weight="bold"),
                          text_color=_CLR["text"], anchor="w").pack(anchor="w")
             if mt.get("fokus"):
-                ctk.CTkLabel(inner, text=mt["fokus"], font=ctk.CTkFont(size=12),
+                ctk.CTkLabel(txt, text=mt["fokus"], font=ctk.CTkFont(size=12),
                              text_color=_CLR["text_secondary"], anchor="w",
                              justify="left", wraplength=430).pack(anchor="w", pady=(2, 0))
-            ctk.CTkLabel(inner, text=meta, font=ctk.CTkFont(size=11, weight="bold"),
+            ctk.CTkLabel(txt, text=meta, font=ctk.CTkFont(size=11, weight="bold"),
                          text_color=_CLR["accent"], anchor="w").pack(anchor="w", pady=(6, 0))
             _bind_recursive(c, lambda e, k=key: self._select_type(k))
             self._type_cards[key] = c
@@ -3116,6 +3154,7 @@ class MeetingWizard(ctk.CTkToplevel):
         for k, c in self._type_cards.items():
             if c.winfo_exists():
                 c.configure(border_color=_CLR["accent"] if k == key else _CLR["card_border"])
+                self._draw_check(self._type_checks[k], k == key)
 
     # — Trin 3: Navn & deltagere --------------------------------------
     def _build_navn(self):
@@ -3156,15 +3195,19 @@ class MeetingWizard(ctk.CTkToplevel):
              "Kører efter mødet. Bedst til danske navne og fagtermer. Kræver en API-nøgle."),
         )
         self._motor_cards = {}
+        self._motor_checks = {}
         for val, title, desc in opts:
             c = ctk.CTkFrame(wrap, fg_color=_CLR["card"], corner_radius=14,
                              border_width=2, border_color=_CLR["card_border"])
             c.pack(fill="x", pady=6)
             inner = ctk.CTkFrame(c, fg_color="transparent")
             inner.pack(fill="x", padx=18, pady=14)
-            ctk.CTkLabel(inner, text=title, font=ctk.CTkFont(size=15, weight="bold"),
+            self._motor_checks[val] = self._add_check(inner)
+            txt = ctk.CTkFrame(inner, fg_color="transparent")
+            txt.pack(side="left", fill="x", expand=True)
+            ctk.CTkLabel(txt, text=title, font=ctk.CTkFont(size=15, weight="bold"),
                          text_color=_CLR["text"], anchor="w").pack(anchor="w")
-            ctk.CTkLabel(inner, text=desc, font=ctk.CTkFont(size=12),
+            ctk.CTkLabel(txt, text=desc, font=ctk.CTkFont(size=12),
                          text_color=_CLR["text_secondary"], anchor="w",
                          justify="left", wraplength=440).pack(anchor="w", pady=(2, 0))
             _bind_recursive(c, lambda e, v=val: self._select_motor(v))
@@ -3183,6 +3226,7 @@ class MeetingWizard(ctk.CTkToplevel):
         for v, c in self._motor_cards.items():
             if c.winfo_exists():
                 c.configure(border_color=_CLR["accent"] if v == val else _CLR["card_border"])
+                self._draw_check(self._motor_checks[v], v == val)
         no_key = not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
         if val == "gemini" and no_key:
             self._motor_hint.configure(
