@@ -49,3 +49,6 @@ ffprobe.exe
 
 # Inno Setup-output
 installer_out/
+
+# Brainstorm-companion (visuelle mockups, ikke i git)
+.superpowers/
