@@ -1032,7 +1032,7 @@ class MeetingApp:
         else:
             hud.set_recording()
             hud.set_timer(self.timer_var.get())
-        hud.set_meeting(self.name_var.get().strip() or self.type_var.get())
+        hud.set_meeting(self._active_subtitle_text())
         try:
             hud.deiconify()
             hud.lift()
@@ -3293,8 +3293,8 @@ class MiniHUD(ctk.CTkToplevel):
         self._anim_after = None
         self._drag = (0, 0)
 
-        pill = ctk.CTkFrame(self, fg_color=_CLR["card"], corner_radius=18,
-                            border_width=1, border_color=_CLR["card_border"])
+        pill = ctk.CTkFrame(self, fg_color=_CLR["sidebar_bg"], corner_radius=18,
+                            border_width=0)
         pill.pack(fill="both", expand=True, padx=2, pady=2)
         inner = ctk.CTkFrame(pill, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=14, pady=10)
@@ -3309,23 +3309,24 @@ class MiniHUD(ctk.CTkToplevel):
             font=ctk.CTkFont(size=10, weight="bold"), text_color=_CLR["rec_active"])
         self._caption.pack(anchor="w")
         self._timer = ctk.CTkLabel(mid, text="00:00:00", anchor="w",
-            font=ctk.CTkFont(family="SF Mono", size=19, weight="bold"), text_color=_CLR["text"])
+            font=ctk.CTkFont(family="SF Mono", size=19, weight="bold"),
+            text_color=_CLR["sidebar_icon_active"])
         self._timer.pack(anchor="w")
         self._name = ctk.CTkLabel(mid, text="", anchor="w",
-            font=ctk.CTkFont(size=11), text_color=_CLR["text_secondary"])
+            font=ctk.CTkFont(size=11), text_color=_CLR["sidebar_icon"])
         self._name.pack(anchor="w")
 
         self._stop_btn = ctk.CTkButton(
             inner, text="■", width=40, height=40, corner_radius=12,
             font=ctk.CTkFont(size=14, weight="bold"), fg_color=_CLR["rec_active"],
-            hover_color="#b91c1c", text_color="#ffffff",
+            hover_color="#c62828", text_color="#ffffff",
             command=self.app._stop_recording)
         self._stop_btn.pack(side="right", padx=(8, 0))
         ctk.CTkButton(
             inner, text="⤢", width=40, height=40, corner_radius=12,
             font=ctk.CTkFont(size=16), fg_color="transparent", border_width=1,
-            border_color=_CLR["card_border"], text_color=_CLR["text"],
-            hover_color="#eef2fb", command=self.app._restore_from_hud).pack(side="right")
+            border_color="#3a4a6a", text_color=_CLR["sidebar_icon_active"],
+            hover_color="#26365a", command=self.app._restore_from_hud).pack(side="right")
 
         # Træk hvor som helst på pillen for at flytte HUD'en.
         for w in (pill, inner, mid, self._caption, self._timer, self._name, self._icon):
