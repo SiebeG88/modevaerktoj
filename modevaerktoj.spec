@@ -17,6 +17,7 @@ datas += ctk_datas
 datas += [
     ("vocabulary.default.json", "."),
     ("meeting_types.default.json", "."),
+    ("AppIcon.ico", "."),   # vinduesikon (root.iconbitmap ved kørsel)
 ]
 
 # --- Binærer ---
@@ -74,7 +75,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,              # AppIcon.ico kan tilføjes senere
+    icon="AppIcon.ico",     # exe-ikon (Windows Stifinder / proceslinje)
 )
 coll = COLLECT(
     exe,
