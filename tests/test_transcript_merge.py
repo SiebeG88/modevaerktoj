@@ -62,6 +62,10 @@ class TestSanitizeSegments:
     def test_empty(self):
         assert sanitize_segments([], 100.0) == []
 
+    def test_zero_duration_clamps_all(self):
+        # Mic-kun-stien bruger sys_dur=0.0 → alt klemmes til 0.
+        assert sanitize_segments([(3.0, 5.0, "x")], 0.0) == [(0.0, 0.0, "x")]
+
 
 class TestRemoveBleed:
     def test_drops_long_overlapping_copy(self):

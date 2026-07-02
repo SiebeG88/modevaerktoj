@@ -1488,18 +1488,13 @@ def _parse_timestamp(s: str) -> int:
 
 
 # Matcher [MM:SS - MM:SS] og [H:MM:SS - H:MM:SS] i starten af en linje.
-_TIMESTAMP_LINE_RE = None
+_TIMESTAMP_LINE_RE = re.compile(
+    r"^\[\s*((?:\d+:)?\d+:\d+)\s*-\s*((?:\d+:)?\d+:\d+)\s*\]"
+)
 
 
 def _offset_transcript(text: str, offset_seconds: int) -> str:
     """Skyder alle [timestamp - timestamp] præfikser med offset_seconds."""
-    import re
-    global _TIMESTAMP_LINE_RE
-    if _TIMESTAMP_LINE_RE is None:
-        _TIMESTAMP_LINE_RE = re.compile(
-            r"^\[\s*((?:\d+:)?\d+:\d+)\s*-\s*((?:\d+:)?\d+:\d+)\s*\]"
-        )
-
     out_lines = []
     for line in text.splitlines():
         m = _TIMESTAMP_LINE_RE.match(line)
@@ -1519,11 +1514,6 @@ def _clamp_chunk_timestamps(text: str, chunk_seconds: float) -> str:
     Modvirker Gemini-hallucinerede tidsstempler, FØR chunk-offset lægges på, så
     urealistiske tal (fx 12 timer på et 12-min chunk) ikke forplanter sig.
     """
-    global _TIMESTAMP_LINE_RE
-    if _TIMESTAMP_LINE_RE is None:
-        _TIMESTAMP_LINE_RE = re.compile(
-            r"^\[\s*((?:\d+:)?\d+:\d+)\s*-\s*((?:\d+:)?\d+:\d+)\s*\]"
-        )
     out_lines = []
     for line in text.splitlines():
         m = _TIMESTAMP_LINE_RE.match(line)
@@ -1899,6 +1889,7 @@ def transcribe_with_gemini(
                         stop_event=stop_event,
                         temperature=0.5,
                     )
+                    text = _clamp_chunk_timestamps(text, chunk_seconds)
                     offset = idx * chunk_seconds
                     results[idx] = _offset_transcript(text, offset)
                     diags[idx] = diag
