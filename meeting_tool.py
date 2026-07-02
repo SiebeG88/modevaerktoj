@@ -39,6 +39,7 @@ from datetime import datetime
 
 import audio_routing
 import app_paths
+from transcript_merge import build_transcript
 
 
 @atexit.register
@@ -755,8 +756,6 @@ def record_and_transcribe_live(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if system_device is not None:
-        from transcript_merge import merge_tracks
-
         base_name = recording_name or f"Driftledelsesmoede {date}"
         mic_path = output_dir / f"{base_name}.mic.wav"
         sys_path = output_dir / f"{base_name}.sys.wav"
@@ -772,7 +771,7 @@ def record_and_transcribe_live(
 
         try:
             _status("Optager to spor (mikrofon + systemlyd) ...")
-            sys_ok = _record_dual_tracks(
+            dual = _record_dual_tracks(
                 mic_path, sys_path, device_id, system_device, stop_event, _status,
             )
         finally:
@@ -796,7 +795,7 @@ def record_and_transcribe_live(
         mic_segs = _parse_transcript_segments(
             transcribe_audio(mic_path, model_size=model_size)
         )
-        if sys_ok:
+        if dual.sys_ok:
             _status("Transkriberer systemlyd-spor lokalt ...")
             sys_segs = _parse_transcript_segments(
                 transcribe_audio(sys_path, model_size=model_size)
@@ -804,7 +803,11 @@ def record_and_transcribe_live(
         else:
             sys_segs = []
 
-        return mic_path, merge_tracks(mic_segs, sys_segs)
+        return mic_path, build_transcript(
+            mic_segs, sys_segs,
+            mic_dur=dual.mic_duration, sys_dur=dual.sys_duration,
+            mic_start=dual.mic_start, sys_start=dual.sys_start,
+        )
 
     chunks_dir = output_dir / ".chunks"
     if chunks_dir.exists():
@@ -1142,14 +1145,14 @@ def record_then_transcribe_gemini(
         _status("Holder maskinen vågen under optagelse.")
 
     if system_device is not None:
-        from transcript_merge import merge_tracks
         mic_path = output_dir / f"{base_name}.mic.wav"
         sys_path = output_dir / f"{base_name}.sys.wav"
         try:
             _status("Optager to spor (mikrofon + systemlyd) ...")
-            sys_ok = _record_dual_tracks(
+            dual = _record_dual_tracks(
                 mic_path, sys_path, device_id, system_device, stop_event, _status,
             )
+            sys_ok = dual.sys_ok
         finally:
             stop_keep_awake(_awake)
         if stop_event is not None:
@@ -1171,7 +1174,11 @@ def record_then_transcribe_gemini(
             )
         else:
             sys_segs = []
-        return mic_path, merge_tracks(mic_segs, sys_segs)
+        return mic_path, build_transcript(
+            mic_segs, sys_segs,
+            mic_dur=dual.mic_duration, sys_dur=dual.sys_duration,
+            mic_start=dual.mic_start, sys_start=dual.sys_start,
+        )
 
     # --- Start ffmpeg ---
     _status(f"Starter optagelse: {master_path.name}")
