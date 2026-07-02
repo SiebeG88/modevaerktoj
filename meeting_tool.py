@@ -33,11 +33,13 @@ import sys
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 
 import audio_routing
 import app_paths
+from transcript_merge import build_transcript
 
 
 @atexit.register
@@ -471,6 +473,43 @@ def record_meeting(output_path: Path, device_id: int | str = 1) -> Path:
         sys.exit(1)
 
 
+@dataclass
+class DualTrackResult:
+    """Resultat af to-spors-optagelse: status, faktiske starttider (epoch) og varigheder."""
+    sys_ok: bool
+    mic_start: float
+    sys_start: float
+    mic_duration: float
+    sys_duration: float
+
+
+def _resolve_sync(stamps, mic_path: Path, sys_path: Path, sys_ok: bool,
+                  *, now: float, duration_fn) -> "DualTrackResult":
+    """Udled DualTrackResult fra start-stempler med sikre fallbacks.
+
+    `stamps` er {"mic": float|None, "sys": float|None}. Manglende mic-stempel →
+    `now`; manglende sys-stempel → mic_start. `duration_fn(path)->float` er
+    injicerbar (i produktion `_ffprobe_duration`)."""
+    mic_start = stamps.get("mic") if stamps.get("mic") is not None else now
+    sys_start = stamps.get("sys") if stamps.get("sys") is not None else mic_start
+    mic_duration = duration_fn(mic_path) if mic_path.exists() else 0.0
+    sys_final = bool(sys_ok and sys_path.exists() and sys_path.stat().st_size > 0)
+    sys_duration = duration_fn(sys_path) if sys_final else 0.0
+    return DualTrackResult(sys_final, mic_start, sys_start, mic_duration, sys_duration)
+
+
+def _write_sync_sidecar(path: Path, result: "DualTrackResult") -> None:
+    """Skriv sync-metadata som JSON ved siden af WAV-filerne."""
+    import json
+    path.write_text(json.dumps({
+        "version": 1,
+        "mic_start": result.mic_start,
+        "sys_start": result.sys_start,
+        "mic_duration": result.mic_duration,
+        "sys_duration": result.sys_duration,
+    }), encoding="utf-8")
+
+
 def _record_dual_tracks(
     mic_path: Path,
     sys_path: Path,
@@ -478,24 +517,29 @@ def _record_dual_tracks(
     sys_device: int,  # historisk parameter (BlackHole-index); ignoreret nu — AudioTee bruges
     stop_event: threading.Event | None,
     on_status,
-) -> bool:
+) -> "DualTrackResult":
     """Optag mikrofon + systemlyd til hver sin WAV.
 
     Mikrofon: ffmpeg/avfoundation som før.
     Systemlyd: AudioTee (Core Audio Tap API, macOS 14.2+) piper rå s16le PCM
-    til en parallel ffmpeg-proces der pakker det som WAV. Ingen BlackHole eller
-    Multi-Output-routing nødvendig.
+    til en pump-tråd der videresender til en parallel ffmpeg-proces der pakker
+    det som WAV. Ingen BlackHole eller Multi-Output-routing nødvendig.
 
-    Returnerer True hvis begge spor blev optaget; ved fejl på systemsporet
-    degraderes til mic-kun (returnerer False, og kun mic_path er gyldig).
+    Returnerer et DualTrackResult med synkroniseringsinformation og skriver
+    desuden et <navn>.sync.json-sidecar ved siden af mic_path.
 
-    De to spor kan starte med få ms forskel; det håndteres af tidsstempel-
-    fletningen i merge_tracks, så sample-præcis sync er ikke nødvendig.
+    Ved fejl på systemsporet degraderes til mic-kun (DualTrackResult.sys_ok=False).
+
+    De to spor kan starte med få ms forskel; det håndteres via tidsstempler i
+    DualTrackResult, så sample-præcis sync er ikke nødvendig her.
     """
     del sys_device  # bagudkompatibilitet — AudioTee tap'per systemlyd direkte
 
     def _status(msg):
         (on_status or print)(msg)
+
+    stamps: dict[str, float | None] = {"mic": None, "sys": None}
+    capture_stop = threading.Event()
 
     # --- Mikrofon-spor: ffmpeg/avfoundation ---
     mic_cmd = [
@@ -505,10 +549,24 @@ def _record_dual_tracks(
     ]
     mic_proc = subprocess.Popen(mic_cmd, stdin=subprocess.PIPE)
 
-    # --- Systemlyd-spor: AudioTee → ffmpeg pipe → WAV ---
+    # Poll-tråd: stempl mic-start når filen vokser forbi WAV-headeren (>1 KB).
+    def _poll_mic_start():
+        while not capture_stop.is_set():
+            try:
+                if mic_path.stat().st_size > 1024:
+                    stamps["mic"] = time.time()
+                    return
+            except OSError:
+                pass
+            capture_stop.wait(0.05)
+    mic_poll_thread = threading.Thread(target=_poll_mic_start, daemon=True)
+    mic_poll_thread.start()
+
+    # --- Systemlyd-spor: AudioTee → (pump-tråd) → ffmpeg pipe → WAV ---
     sys_ok = True
     audiotee_proc: subprocess.Popen | None = None
     sys_ffmpeg_proc: subprocess.Popen | None = None
+    sys_pump_thread: threading.Thread | None = None
     if not AUDIOTEE_BIN.exists():
         _status(
             f"AudioTee-binær mangler ({AUDIOTEE_BIN.name}) — "
@@ -520,7 +578,7 @@ def _record_dual_tracks(
             audiotee_proc = subprocess.Popen(
                 [str(AUDIOTEE_BIN), "--sample-rate", "16000"],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,  # AudioTee logger debug til stderr; drop det
+                stderr=subprocess.DEVNULL,
             )
             sys_ffmpeg_proc = subprocess.Popen(
                 [
@@ -530,16 +588,35 @@ def _record_dual_tracks(
                     "-c:a", "copy",
                     str(sys_path), "-y", "-loglevel", "warning",
                 ],
-                stdin=audiotee_proc.stdout,
+                stdin=subprocess.PIPE,
             )
-            # Luk vores reference til pipen så AudioTee's EOF når ffmpeg.
-            audiotee_proc.stdout.close()
+
+            def _pump_sys():
+                first = True
+                try:
+                    while True:
+                        data = audiotee_proc.stdout.read(4096)
+                        if not data:
+                            break
+                        if first:
+                            stamps["sys"] = time.time()
+                            first = False
+                        try:
+                            sys_ffmpeg_proc.stdin.write(data)
+                        except (BrokenPipeError, ValueError):
+                            break
+                finally:
+                    try:
+                        sys_ffmpeg_proc.stdin.close()
+                    except Exception:
+                        pass
+            sys_pump_thread = threading.Thread(target=_pump_sys, daemon=True)
+            sys_pump_thread.start()
         except Exception as e:  # pragma: no cover
             _status(f"Kunne ikke starte systemlyd-optagelse: {e} — fortsætter mic-kun.")
             sys_ok = False
 
     def stop_all():
-        # Mic: ffmpeg pænt via 'q' til stdin
         try:
             if mic_proc.stdin and not mic_proc.stdin.closed:
                 mic_proc.stdin.write(b"q")
@@ -547,7 +624,6 @@ def _record_dual_tracks(
                 mic_proc.stdin.close()
         except Exception:  # pragma: no cover
             mic_proc.terminate()
-        # Sys: SIGINT til AudioTee → den lukker stdout → sys-ffmpeg ser EOF og afslutter
         if audiotee_proc is not None and audiotee_proc.poll() is None:
             try:
                 audiotee_proc.send_signal(signal.SIGINT)
@@ -572,14 +648,13 @@ def _record_dual_tracks(
                     pass
 
     if stop_event is not None:
-        # Vent til brugeren trykker Stop, signalér SÅ processerne og dræn dem.
-        # (Tidligere kørte _drain straks med 12s-timeout via en watch-tråd, så
-        #  optagelsen afsluttede sig selv efter ~12s uanset brugeren — bug'en.)
         stop_event.wait()
         stop_all()
         _drain(mic_proc, "ffmpeg-mic")
         if audiotee_proc is not None:
             _drain(audiotee_proc, "AudioTee")
+        if sys_pump_thread is not None:
+            sys_pump_thread.join(timeout=5)
         if sys_ffmpeg_proc is not None:
             _drain(sys_ffmpeg_proc, "ffmpeg-sys")
     else:  # pragma: no cover
@@ -588,12 +663,29 @@ def _record_dual_tracks(
             _drain(mic_proc, "ffmpeg-mic")
             if audiotee_proc is not None:
                 _drain(audiotee_proc, "AudioTee")
+            if sys_pump_thread is not None:
+                sys_pump_thread.join(timeout=5)
             if sys_ffmpeg_proc is not None:
                 _drain(sys_ffmpeg_proc, "ffmpeg-sys")
         finally:
             signal.signal(signal.SIGINT, original)
 
-    return sys_ok and sys_path.exists() and sys_path.stat().st_size > 0
+    capture_stop.set()
+    mic_poll_thread.join(timeout=1)
+
+    result = _resolve_sync(
+        stamps, mic_path, sys_path, sys_ok,
+        now=time.time(), duration_fn=_ffprobe_duration,
+    )
+    name = mic_path.name
+    suffix = ".mic.wav"
+    base = name[:-len(suffix)] if name.endswith(suffix) else mic_path.stem
+    sidecar_path = mic_path.with_name(base + ".sync.json")
+    try:
+        _write_sync_sidecar(sidecar_path, result)
+    except Exception as e:  # pragma: no cover
+        _status(f"Kunne ikke skrive {sidecar_path.name}: {e}")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -673,8 +765,6 @@ def record_and_transcribe_live(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if system_device is not None:
-        from transcript_merge import merge_tracks
-
         base_name = recording_name or f"Driftledelsesmoede {date}"
         mic_path = output_dir / f"{base_name}.mic.wav"
         sys_path = output_dir / f"{base_name}.sys.wav"
@@ -690,7 +780,7 @@ def record_and_transcribe_live(
 
         try:
             _status("Optager to spor (mikrofon + systemlyd) ...")
-            sys_ok = _record_dual_tracks(
+            dual = _record_dual_tracks(
                 mic_path, sys_path, device_id, system_device, stop_event, _status,
             )
         finally:
@@ -714,7 +804,7 @@ def record_and_transcribe_live(
         mic_segs = _parse_transcript_segments(
             transcribe_audio(mic_path, model_size=model_size)
         )
-        if sys_ok:
+        if dual.sys_ok:
             _status("Transkriberer systemlyd-spor lokalt ...")
             sys_segs = _parse_transcript_segments(
                 transcribe_audio(sys_path, model_size=model_size)
@@ -722,7 +812,11 @@ def record_and_transcribe_live(
         else:
             sys_segs = []
 
-        return mic_path, merge_tracks(mic_segs, sys_segs)
+        return mic_path, build_transcript(
+            mic_segs, sys_segs,
+            mic_dur=dual.mic_duration, sys_dur=dual.sys_duration,
+            mic_start=dual.mic_start, sys_start=dual.sys_start,
+        )
 
     chunks_dir = output_dir / ".chunks"
     if chunks_dir.exists():
@@ -1064,14 +1158,14 @@ def record_then_transcribe_gemini(
         _status("Holder maskinen vågen under optagelse.")
 
     if system_device is not None:
-        from transcript_merge import merge_tracks
         mic_path = output_dir / f"{base_name}.mic.wav"
         sys_path = output_dir / f"{base_name}.sys.wav"
         try:
             _status("Optager to spor (mikrofon + systemlyd) ...")
-            sys_ok = _record_dual_tracks(
+            dual = _record_dual_tracks(
                 mic_path, sys_path, device_id, system_device, stop_event, _status,
             )
+            sys_ok = dual.sys_ok
         finally:
             stop_keep_awake(_awake)
         if stop_event is not None:
@@ -1093,7 +1187,11 @@ def record_then_transcribe_gemini(
             )
         else:
             sys_segs = []
-        return mic_path, merge_tracks(mic_segs, sys_segs)
+        return mic_path, build_transcript(
+            mic_segs, sys_segs,
+            mic_dur=dual.mic_duration, sys_dur=dual.sys_duration,
+            mic_start=dual.mic_start, sys_start=dual.sys_start,
+        )
 
     # --- Start ffmpeg ---
     _status(f"Starter optagelse: {master_path.name}")
@@ -1410,18 +1508,13 @@ def _parse_timestamp(s: str) -> int:
 
 
 # Matcher [MM:SS - MM:SS] og [H:MM:SS - H:MM:SS] i starten af en linje.
-_TIMESTAMP_LINE_RE = None
+_TIMESTAMP_LINE_RE = re.compile(
+    r"^\[\s*((?:\d+:)?\d+:\d+)\s*-\s*((?:\d+:)?\d+:\d+)\s*\]"
+)
 
 
 def _offset_transcript(text: str, offset_seconds: int) -> str:
     """Skyder alle [timestamp - timestamp] præfikser med offset_seconds."""
-    import re
-    global _TIMESTAMP_LINE_RE
-    if _TIMESTAMP_LINE_RE is None:
-        _TIMESTAMP_LINE_RE = re.compile(
-            r"^\[\s*((?:\d+:)?\d+:\d+)\s*-\s*((?:\d+:)?\d+:\d+)\s*\]"
-        )
-
     out_lines = []
     for line in text.splitlines():
         m = _TIMESTAMP_LINE_RE.match(line)
@@ -1430,6 +1523,27 @@ def _offset_transcript(text: str, offset_seconds: int) -> str:
             t2 = _parse_timestamp(m.group(2)) + offset_seconds
             rest = line[m.end():]
             out_lines.append(f"[{format_timestamp(t1)} - {format_timestamp(t2)}]{rest}")
+        else:
+            out_lines.append(line)
+    return "\n".join(out_lines)
+
+
+def _clamp_chunk_timestamps(text: str, chunk_seconds: float) -> str:
+    """Klem hvert segments [start - end]-præfiks til [0, chunk_seconds].
+
+    Modvirker Gemini-hallucinerede tidsstempler, FØR chunk-offset lægges på, så
+    urealistiske tal (fx 12 timer på et 12-min chunk) ikke forplanter sig.
+    """
+    out_lines = []
+    for line in text.splitlines():
+        m = _TIMESTAMP_LINE_RE.match(line)
+        if m:
+            t1 = max(0.0, min(float(_parse_timestamp(m.group(1))), chunk_seconds))
+            t2 = max(0.0, min(float(_parse_timestamp(m.group(2))), chunk_seconds))
+            if t2 < t1:
+                t2 = t1
+            rest = line[m.end():]
+            out_lines.append(f"[{format_timestamp(int(t1))} - {format_timestamp(int(t2))}]{rest}")
         else:
             out_lines.append(line)
     return "\n".join(out_lines)
@@ -1749,6 +1863,7 @@ def transcribe_with_gemini(
                 client, path, system_instruction, model, label, _status,
                 stop_event=stop_event,
             )
+            text = _clamp_chunk_timestamps(text, chunk_seconds)
             offset = idx * chunk_seconds
             return idx, _offset_transcript(text, offset), diag
 
@@ -1801,6 +1916,7 @@ def transcribe_with_gemini(
                         stop_event=stop_event,
                         temperature=0.5,
                     )
+                    text = _clamp_chunk_timestamps(text, chunk_seconds)
                     offset = idx * chunk_seconds
                     results[idx] = _offset_transcript(text, offset)
                     diags[idx] = diag

@@ -263,7 +263,9 @@ class TestRecordAndTranscribeLiveDual:
     ):
         def fake_record(mic_path, sys_path, *a, **k):
             mic_path.write_bytes(b"RIFF" * 1000)  # kun mic-sporet skabes
-            return False  # systemsporet fejlede
+            return mt.DualTrackResult(  # systemsporet fejlede
+                sys_ok=False, mic_start=1000.0, sys_start=1000.0,
+                mic_duration=5.0, sys_duration=0.0)
 
         mocker.patch("meeting_tool._record_dual_tracks", side_effect=fake_record)
         mocker.patch("subprocess.Popen")  # caffeinate
@@ -281,3 +283,41 @@ class TestRecordAndTranscribeLiveDual:
         assert "Modpart:" not in transcript
         # transcribe_audio kaldt netop én gang (kun mic-sporet)
         assert mt.transcribe_audio.call_count == 1
+
+
+class TestClampChunkTimestamps:
+    def test_clamps_hallucinated_timestamps(self):
+        text = "[00:30 - 00:31] Hej.\n[50:10 - 1:10:10] Lang saetning."
+        out = mt._clamp_chunk_timestamps(text, 720)   # 12-min chunk
+        lines = out.splitlines()
+        assert lines[0] == "[00:30 - 00:31] Hej."
+        assert lines[1] == "[12:00 - 12:00] Lang saetning."
+
+    def test_leaves_lines_without_timestamp(self):
+        assert mt._clamp_chunk_timestamps("ingen tidsstempel her", 720) == "ingen tidsstempel her"
+
+
+class TestGeminiDualTrackUsesBuildTranscript:
+    def test_calls_build_transcript_with_sync(self, tmp_path, mock_subprocess, mocker):
+        # _record_dual_tracks opretter mic.wav i produktion; mock'en gør det samme,
+        # så funktionens efterfølgende eksistens-tjek passerer.
+        def _fake_record(mic_path, sys_path, *a, **k):
+            mic_path.write_bytes(b"RIFF" * 500)
+            return mt.DualTrackResult(
+                sys_ok=True, mic_start=1225.0, sys_start=1000.0,
+                mic_duration=300.0, sys_duration=600.0)
+        mocker.patch("meeting_tool._record_dual_tracks", side_effect=_fake_record)
+        mocker.patch("meeting_tool.transcribe_with_gemini",
+                     return_value="[00:00 - 00:05] hej")
+        bt = mocker.patch("meeting_tool.build_transcript", return_value="FLETTET")
+
+        wav, transcript = mt.record_then_transcribe_gemini(
+            output_dir=tmp_path, date="25-06-2026", device_id=0,
+            system_device=0, attendees=["A"], stop_event=None,
+        )
+        assert transcript == "FLETTET"
+        _, kwargs = bt.call_args
+        assert kwargs["mic_start"] == 1225.0
+        assert kwargs["sys_start"] == 1000.0
+        assert kwargs["mic_dur"] == 300.0
+        assert kwargs["sys_dur"] == 600.0
