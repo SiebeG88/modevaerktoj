@@ -2071,6 +2071,11 @@ def _slugify_type_name(navn: str) -> str:
     return s or "type"
 
 
+# Etiketter i guidens niveau-vælger ↔ interne niveauer
+_NIVEAU_LABELS = {"kortfattet": "Kort", "balanceret": "Mellem", "grundig": "Grundig"}
+_NIVEAU_KEYS = {v: k for k, v in _NIVEAU_LABELS.items()}
+
+
 def ensure_meeting_type(types: dict, navn: str) -> tuple[dict, str, bool]:
     """Slå navnet op (trimmet, case-insensitivt) i types; findes det,
     genbruges den eksisterende type — der oprettes aldrig dubletter, og
@@ -3137,6 +3142,8 @@ class MeetingWizard(ctk.CTkToplevel):
         self.transient(app.root)
         self._step = 0
         self._type_keys = list(app._meeting_types)
+        self._adhoc_var = ctk.StringVar()  # navn til ad-hoc mødetype (trin 2)
+        self._adhoc_active = False
 
         W, H = 560, 600
         self.geometry(f"{W}x{H}")
@@ -3262,6 +3269,8 @@ class MeetingWizard(ctk.CTkToplevel):
             self.go_to(self._step - 1)
 
     def _next(self):
+        if self.STEPS[self._step] == "type":
+            self._commit_adhoc_type()
         if self._step < len(self.STEPS) - 1:
             self.go_to(self._step + 1)
         else:
@@ -3360,19 +3369,115 @@ class MeetingWizard(ctk.CTkToplevel):
                          text_color=_CLR["accent"], anchor="w").pack(anchor="w", pady=(6, 0))
             _bind_recursive(c, lambda e, k=key: self._select_type(k))
             self._type_cards[key] = c
-        self._highlight_type(self.app._type_key)
+
+        # "+ Ny mødetype": skriv et navn — typen oprettes automatisk med
+        # standardværdier når du går videre (spec §3).
+        c = ctk.CTkFrame(wrap, fg_color=_CLR["card"], corner_radius=14,
+                         border_width=2, border_color=_CLR["card_border"])
+        c.pack(fill="x", pady=6, padx=2)
+        inner = ctk.CTkFrame(c, fg_color="transparent")
+        inner.pack(fill="x", padx=18, pady=14)
+        self._adhoc_check = self._add_check(inner)
+        txt = ctk.CTkFrame(inner, fg_color="transparent")
+        txt.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(txt, text="+ Ny mødetype", font=ctk.CTkFont(size=15, weight="bold"),
+                     text_color=_CLR["text"], anchor="w").pack(anchor="w")
+        adhoc_entry = ctk.CTkEntry(
+            txt, textvariable=self._adhoc_var, height=34, corner_radius=8,
+            placeholder_text="Skriv navnet, fx Ansættelsessamtale",
+            border_width=1, border_color=_CLR["card_border"], fg_color="#ffffff",
+            text_color=_CLR["text"], placeholder_text_color=_CLR["text_placeholder"],
+            font=ctk.CTkFont(size=13))
+        adhoc_entry.pack(fill="x", pady=(6, 0))
+        ctk.CTkLabel(txt, text="Oprettes med standardindstillinger — kan rettes i Indstillinger → Mødetyper",
+                     font=ctk.CTkFont(size=11), text_color=_CLR["text_secondary"],
+                     anchor="w", justify="left", wraplength=430).pack(anchor="w", pady=(4, 0))
+        self._adhoc_card = c
+        adhoc_entry.bind("<FocusIn>", lambda e: self._select_adhoc())
+        adhoc_entry.bind("<KeyRelease>", lambda e: self._select_adhoc())
+        _bind_recursive(c, lambda e: self._select_adhoc())
+
+        # Referatniveau for DETTE møde (overstyrer typens detaljeniveau)
+        lvl_row = ctk.CTkFrame(self._body, fg_color="transparent")
+        lvl_row.pack(fill="x", pady=(10, 0))
+        ctk.CTkLabel(lvl_row, text="Referat", font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=_CLR["text"], anchor="w").pack(side="left", padx=(2, 12))
+        self._level_seg = ctk.CTkSegmentedButton(
+            lvl_row, values=list(_NIVEAU_KEYS), font=ctk.CTkFont(size=13),
+            text_color=_CLR["text"], selected_color=_CLR["accent"],
+            selected_hover_color=_CLR["accent_hover"],
+            unselected_color=_CLR["card_border"], unselected_hover_color="#eef2fb",
+            command=self._on_level_selected)
+        self._level_seg.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(lvl_row, text="Gælder kun dette møde", font=ctk.CTkFont(size=11),
+                     text_color=_CLR["text_secondary"]).pack(side="left", padx=(12, 0))
+        self._sync_level_seg()
+
+        self._highlight_type(None if self._adhoc_active else self.app._type_key)
 
     def _select_type(self, key):
+        self._adhoc_active = False
         self.app._type_key = key
         self.app.type_var.set(self.app._meeting_types[key]["navn"])
-        self.app._on_type_selected(self.app._meeting_types[key]["navn"])
+        self.app._on_type_selected(self.app._meeting_types[key]["navn"])  # nulstiller også overstyring
         self._highlight_type(key)
+        self._sync_level_seg()
 
     def _highlight_type(self, key):
         for k, c in self._type_cards.items():
             if c.winfo_exists():
                 c.configure(border_color=_CLR["accent"] if k == key else _CLR["card_border"])
                 self._draw_check(self._type_checks[k], k == key)
+        if self._adhoc_card.winfo_exists():
+            on = key is None and self._adhoc_active
+            self._adhoc_card.configure(border_color=_CLR["accent"] if on else _CLR["card_border"])
+            self._draw_check(self._adhoc_check, on)
+
+    def _select_adhoc(self):
+        """Markér ad-hoc kortet (kaldes ved klik/fokus/tastetryk i feltet)."""
+        if not self._adhoc_active:
+            self.app.referat_level_override = None  # frisk valg → følg typen
+        self._adhoc_active = True
+        self._highlight_type(None)
+        self._sync_level_seg()
+
+    def _commit_adhoc_type(self):
+        """Opret/genbrug ad-hoc typen hvis feltet er aktivt og udfyldt.
+        Tomt felt → behold den senest markerede eksisterende type (spec §6)."""
+        navn = self._adhoc_var.get().strip()
+        if not (self._adhoc_active and navn):
+            return
+        override = self.app.referat_level_override   # bevar pr.-møde-valget
+        key = self.app._save_adhoc_type(navn)
+        self._adhoc_active = False
+        self._adhoc_var.set("")
+        self._type_keys = list(self.app._meeting_types)
+        self.app._type_key = key
+        self.app.type_var.set(self.app._meeting_types[key]["navn"])
+        self.app._on_type_selected(self.app._meeting_types[key]["navn"])
+        self.app.referat_level_override = override
+
+    # — Referatniveau (pr. møde) ---------------------------------------
+    def _current_level(self) -> str:
+        """Niveauet vælgeren skal vise: aktiv overstyring, ellers typens eget
+        (ad-hoc typer oprettes som 'balanceret')."""
+        if self.app.referat_level_override is not None:
+            return self.app.referat_level_override
+        if self._adhoc_active:
+            return "balanceret"
+        return self.app._meeting_types[self.app._type_key]["detaljeniveau"]
+
+    def _sync_level_seg(self):
+        if self._level_seg.winfo_exists():
+            self._level_seg.set(_NIVEAU_LABELS[self._current_level()])
+
+    def _on_level_selected(self, label: str):
+        """Afviger valget fra typens eget niveau, sættes en pr.-møde-
+        overstyring; ellers ryddes den (None = følg typen)."""
+        niveau = _NIVEAU_KEYS[label]
+        base = ("balanceret" if self._adhoc_active
+                else self.app._meeting_types[self.app._type_key]["detaljeniveau"])
+        self.app.referat_level_override = None if niveau == base else niveau
 
     # — Trin 3: Navn & deltagere --------------------------------------
     def _build_navn(self):
