@@ -28,9 +28,11 @@ promptbygningen, `meeting_tool.py`) ændres **ikke**.
 - Referatniveau pr. møde: segmenteret vælger (Kort / Mellem / Grundig) i
   guidens trin 2; overstyrer typens `detaljeniveau` for dette ene møde.
 
+- Samme muligheder i "Transkribér fil"-fanen (tilføjet som udvidelse, se §8):
+  typbart mødetype-felt (ad-hoc oprettelse) + niveau-vælger pr. kørsel.
+
 **IKKE inkluderet (bevidst):**
 - Overstyring af citater/opgaveliste/fokus pr. møde — de følger typen.
-- Samme vælger i "Transkribér fil"-fanen — kan tilføjes senere, trivielt.
 - Regenerering af referat med andet niveau efter mødet.
 
 ## 3. Ad-hoc mødetype
@@ -115,3 +117,29 @@ visuelle sprog (accentfarve på den aktive).
   `self._meeting_types` er uændret; vælger nulstilles ved typeskift; uden
   aktiv overstyring sendes typens eget niveau.
 - Hele den eksisterende suite (300+) forbliver grøn.
+
+## 8. Udvidelse: samme muligheder i "Transkribér fil"-fanen
+
+Brugerønske efter første leverance: de samme to muligheder skal også findes
+når man transkriberer en eksisterende lydfil.
+
+**Ad-hoc mødetype:** Mødetype-dropdownen i fanen bliver typbar
+(`state="normal"` i stedet for `"readonly"`). Skriver brugeren et navn der
+ikke matcher en eksisterende type (case-insensitivt, trimmet), oprettes
+typen automatisk med standardværdier **når kørslen startes** — samme
+regler som i guiden (navnematch genbruger, slug-kollision får talsuffiks,
+skrivefejl → typen beholdes i hukommelsen for denne kørsel). En lille
+hjælpetekst under dropdownen forklarer det.
+
+**Referatniveau pr. kørsel:** Samme Kort/Mellem/Grundig-vælger som i
+guiden, under mødetype-feltet. Forvalgt = typens eget niveau; nulstilles
+ved typeskift og efter start. Afviger valget, sendes en kopi af typen med
+andet `detaljeniveau` — typen og `meeting_types.json` røres ikke. I fanen
+er vælgeren selv tilstanden (ingen separat override-attribut): niveau ≠
+typens eget = overstyring.
+
+**Wiring:** `TranscribeFileTab` får en valgfri `on_types_changed`-callback
+(spejler `MeetingTypesTab.on_change`). `MeetingApp` binder den til
+`_on_meeting_types_changed()` + `_types_tab.reload_from_disk()`, så alle
+faner ser en ad-hoc type oprettet fra fil-fanen. Kernen samles i
+`TranscribeFileTab._resolve_meeting_type()` (testbar uden GUI).
