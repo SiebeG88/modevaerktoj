@@ -1064,13 +1064,14 @@ class MeetingApp:
         _set("folder", self.folder_var.get())
 
     def _clear_meeting_fields(self):
-        """Nulstil de mødespecifikke felter (mødeform, type, navn, deltagere),
+        """Nulstil de mødespecifikke felter (mødeform, type, navn, deltagere, referatniveau),
         så opsummeringen står tom når wizarden springes over. Tekniske
         indstillinger (motor, mikrofon, mappe) bevares."""
         self.meeting_form_var.set("")
         self.type_var.set("")
         self.name_var.set("")
         self.attendees_var.set("")
+        self.referat_level_override = None
         self._refresh_summary()
 
     def _open_wizard(self, start_step=0):

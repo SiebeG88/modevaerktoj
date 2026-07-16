@@ -146,3 +146,23 @@ class TestSaveAdhocType:
         assert key in app._type_keys
         assert "changed" not in app.calls          # intet disk-refresh
         assert any(c[0] == "status" for c in app.calls if isinstance(c, tuple))
+
+
+class TestClearMeetingFields:
+    def test_clear_meeting_fields_resets_level_override(self):
+        """Nulstiller referatniveau-overstyring når mødet skabes på ny."""
+        # Opret en fake app med de attributter som _clear_meeting_fields rører
+        app = SimpleNamespace(
+            meeting_form_var=SimpleNamespace(set=lambda s: None),
+            type_var=SimpleNamespace(set=lambda s: None),
+            name_var=SimpleNamespace(set=lambda s: None),
+            attendees_var=SimpleNamespace(set=lambda s: None),
+            _refresh_summary=lambda: None,
+            referat_level_override="grundig",  # Sæt til en ikke-None værdi først
+        )
+        # Bind metoden til fake app'en
+        app._clear_meeting_fields = MethodType(meeting_app.MeetingApp._clear_meeting_fields, app)
+        # Kald metoden
+        app._clear_meeting_fields()
+        # Bekræft at overstyringen blev nulstillet
+        assert app.referat_level_override is None
