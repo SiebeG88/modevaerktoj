@@ -20,6 +20,7 @@ import json
 import math
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -2024,6 +2025,70 @@ class VocabularyTab:
         self._status_label.configure(text=msg)
         # Ryd status efter 3 sekunder
         self.parent.after(3000, lambda: self._status_label.configure(text=""))
+
+
+# ---------------------------------------------------------------------------
+# Ad-hoc mødetyper (oprettes direkte fra guidens trin 2)
+# ---------------------------------------------------------------------------
+
+_SLUG_TRANS = str.maketrans({"æ": "ae", "ø": "oe", "å": "aa"})
+
+
+def _slugify_type_name(navn: str) -> str:
+    """Nøgle af et typenavn: små bogstaver, æ/ø/å translittereret,
+    alt ikke-alfanumerisk → '-'. Tomt resultat → 'type'."""
+    s = navn.strip().lower().translate(_SLUG_TRANS)
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s or "type"
+
+
+def ensure_meeting_type(types: dict, navn: str) -> tuple[dict, str, bool]:
+    """Slå navnet op (trimmet, case-insensitivt) i types; findes det,
+    genbruges den eksisterende type — der oprettes aldrig dubletter, og
+    eksisterende typer overskrives aldrig. Ellers oprettes en ny type med
+    standardværdier (jf. spec §3); slug-kollision får talsuffiks (-2, -3, …).
+
+    Returnerer (types, nøgle, oprettet). Ved oprettelse returneres en NY
+    dict — den givne muteres aldrig."""
+    target = navn.strip()
+    if not target:
+        raise ValueError("Tomt typenavn")
+    folded = target.casefold()
+    for k, t in types.items():
+        if t.get("navn", "").strip().casefold() == folded:
+            return types, k, False
+    key = base = _slugify_type_name(target)
+    n = 2
+    while key in types:
+        key = f"{base}-{n}"
+        n += 1
+    new_types = dict(types)
+    new_types[key] = meeting_tool._normalize_meeting_type({"navn": target})
+    return new_types, key, True
+
+
+def override_detaljeniveau(mtype: dict, niveau: str | None) -> dict:
+    """Kopi af mtype med detaljeniveau erstattet — kun hvis niveau er gyldigt
+    og forskelligt fra typens eget. Ellers returneres mtype uændret (samme
+    objekt). Originalen muteres aldrig, så typen i self._meeting_types og
+    meeting_types.json påvirkes ikke."""
+    if niveau not in meeting_tool.DETALJENIVEAUER or mtype.get("detaljeniveau") == niveau:
+        return mtype
+    out = dict(mtype)
+    out["detaljeniveau"] = niveau
+    return out
+
+
+def persist_meeting_types(types: dict, path: Path) -> str | None:
+    """Skriv types til path (samme format som Mødetyper-fanen).
+    Returnerer None ved succes, ellers en dansk fejlbesked."""
+    try:
+        path.write_text(
+            json.dumps(types, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return None
+    except OSError as e:
+        return f"Kunne ikke gemme: {e}"
 
 
 class MeetingTypesTab:
