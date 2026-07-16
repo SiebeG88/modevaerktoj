@@ -498,6 +498,10 @@ class MeetingApp:
             self._type_key = next(iter(self._meeting_types))
         self._type_keys = list(self._meeting_types)
 
+        # Referatniveau-overstyring for det NÆSTE møde (None = følg typen).
+        # Sættes i guidens trin 2; nulstilles ved typeskift og efter start.
+        self.referat_level_override: str | None = None
+
         # Configure the window background
         self.root.configure(fg_color=_CLR["bg"])
 
@@ -1259,6 +1263,7 @@ class MeetingApp:
         return self._type_keys[0]
 
     def _on_type_selected(self, label: str):
+        self.referat_level_override = None  # nyt typevalg → følg typens niveau
         self._type_key = self._key_for_label(label)
         mtype = self._meeting_types[self._type_key]
         self.name_var.set(f"{mtype['navn']} {self.date_var.get()}")
@@ -1282,6 +1287,26 @@ class MeetingApp:
         if self._type_key not in self._meeting_types:
             self._type_key = self._type_keys[0]
         self.type_var.set(self._meeting_types[self._type_key]["navn"])
+
+    def _save_adhoc_type(self, navn: str) -> str:
+        """Opret (eller genbrug) en mødetype ud fra et ad-hoc navn fra guiden.
+
+        Ny type gemmes i meeting_types.json og alle dropdowns/faner
+        opdateres. Kan filen ikke skrives, beholdes typen i hukommelsen så
+        DETTE møde stadig kan startes — den er blot ikke gemt til næste gang
+        (jf. spec §6). Returnerer typens nøgle."""
+        types, key, created = ensure_meeting_type(self._meeting_types, navn)
+        if not created:
+            return key
+        fejl = persist_meeting_types(types, MeetingTypesTab.TYPES_FILE)
+        if fejl is None:
+            self._on_meeting_types_changed()      # genindlæser alt fra disk
+            self._types_tab.reload_from_disk()    # Mødetyper-fanens kopi
+        else:
+            self._meeting_types = types
+            self._type_keys = list(types)
+            self.status_var.set(fejl)
+        return key
 
     def _on_meeting_types_changed(self):
         """Callback fra Mødetyper-fanen: opdatér begge mødetype-dropdowns."""
@@ -1499,7 +1524,10 @@ class MeetingApp:
         gen_minutes = self.minutes_var.get()
         engine = self.engine_var.get()
         system_audio = self.system_audio_var.get()
-        meeting_type = self._meeting_types[self._type_key]
+        # Pr.-møde-overstyring af referatniveau: kopi af typen, original røres ikke
+        meeting_type = override_detaljeniveau(
+            self._meeting_types[self._type_key], self.referat_level_override
+        )
 
         self._log(f"Motor: {engine}")
         self._log("")
@@ -1510,6 +1538,7 @@ class MeetingApp:
             daemon=True,
         )
         self.worker_thread.start()
+        self.referat_level_override = None  # gjaldt kun dette møde
 
     def _stop_recording(self):
         if not self.recording:
@@ -2384,6 +2413,15 @@ class MeetingTypesTab:
             self._set_status("Gemt.")
         except OSError as e:
             self._set_status(f"Kunne ikke gemme: {e}")
+
+    def reload_from_disk(self):
+        """Genindlæs typer fra disk (fx efter ad-hoc oprettelse i guiden), så
+        et senere Gem her i fanen ikke overskriver med en forældet kopi.
+        Bevarer markeringen hvis nøglen stadig findes."""
+        self.types = meeting_tool.load_meeting_types(CONFIG_DIR)
+        if self.current_key not in self.types:
+            self.current_key = next(iter(self.types))
+        self._load_into_form(self.current_key)  # kalder også _refresh_selector
 
     def _save(self):
         new_type = self._form_to_type()

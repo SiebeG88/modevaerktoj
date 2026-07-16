@@ -95,3 +95,54 @@ class TestPersistMeetingTypes:
         # tmp_path er en mappe → write_text fejler med OSError
         msg = meeting_app.persist_meeting_types(_types(), tmp_path)
         assert msg is not None and "Kunne ikke gemme" in msg
+
+
+from types import MethodType, SimpleNamespace
+
+
+def _fake_app(tmp_path, monkeypatch, types=None):
+    """Minimal MeetingApp-attrap: kun det _save_adhoc_type rører."""
+    monkeypatch.setattr(
+        meeting_app.MeetingTypesTab, "TYPES_FILE", tmp_path / "meeting_types.json"
+    )
+    calls = []
+    app = SimpleNamespace(
+        _meeting_types=types if types is not None else _types(),
+        _type_keys=["driftledelse"],
+        _on_meeting_types_changed=lambda: calls.append("changed"),
+        _types_tab=SimpleNamespace(reload_from_disk=lambda: calls.append("tab-reload")),
+        status_var=SimpleNamespace(set=lambda s: calls.append(("status", s))),
+    )
+    app.calls = calls
+    app._save_adhoc_type = MethodType(meeting_app.MeetingApp._save_adhoc_type, app)
+    return app
+
+
+class TestSaveAdhocType:
+    def test_creates_persists_and_refreshes(self, tmp_path, monkeypatch):
+        app = _fake_app(tmp_path, monkeypatch)
+        key = app._save_adhoc_type("Ansættelsessamtale")
+        assert key == "ansaettelsessamtale"
+        data = json.loads(
+            (tmp_path / "meeting_types.json").read_text(encoding="utf-8")
+        )
+        assert data[key]["navn"] == "Ansættelsessamtale"
+        assert "changed" in app.calls and "tab-reload" in app.calls
+
+    def test_existing_name_reuses_without_writing(self, tmp_path, monkeypatch):
+        app = _fake_app(tmp_path, monkeypatch)
+        key = app._save_adhoc_type("Driftledelsesmøde")
+        assert key == "driftledelse"
+        assert not (tmp_path / "meeting_types.json").exists()
+        assert app.calls == []
+
+    def test_write_failure_keeps_type_in_memory(self, tmp_path, monkeypatch):
+        app = _fake_app(tmp_path, monkeypatch)
+        # Peg TYPES_FILE på en mappe → persist fejler med OSError
+        monkeypatch.setattr(meeting_app.MeetingTypesTab, "TYPES_FILE", tmp_path)
+        key = app._save_adhoc_type("Ansættelsessamtale")
+        assert key == "ansaettelsessamtale"
+        assert key in app._meeting_types          # brugbar for DETTE møde
+        assert key in app._type_keys
+        assert "changed" not in app.calls          # intet disk-refresh
+        assert any(c[0] == "status" for c in app.calls if isinstance(c, tuple))
