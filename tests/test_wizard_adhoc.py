@@ -60,12 +60,28 @@ def fake_app(root, tmp_path, monkeypatch):
         _type_key="driftledelse",
         type_var=ctk.StringVar(value="Driftledelsesmøde"),
         referat_level_override=None,
-        _on_meeting_types_changed=lambda: None,
         _types_tab=SimpleNamespace(reload_from_disk=lambda: None),
         status_var=SimpleNamespace(set=lambda s: None),
-        _on_type_selected=lambda label: None,
         tmp_path=tmp_path,
     )
+
+    # Stubbene skal spejle den RIGTIGE MeetingApp-adfærd, som produktions-
+    # koden er afhængig af (attaches efter, da SimpleNamespace ikke kan
+    # selv-referere under konstruktion):
+
+    def _on_meeting_types_changed():
+        # Som MeetingApp.refresh_meeting_types: genindlæs typerne fra disk,
+        # så den nyoprettede ad-hoc type findes i app._meeting_types.
+        app._meeting_types = meeting_tool.load_meeting_types(tmp_path)
+        app._type_keys = list(app._meeting_types)
+
+    def _on_type_selected(label):
+        # Som MeetingApp._on_type_selected: nyt typevalg nulstiller
+        # pr.-møde-overstyringen.
+        app.referat_level_override = None
+
+    app._on_meeting_types_changed = _on_meeting_types_changed
+    app._on_type_selected = _on_type_selected
     app._save_adhoc_type = MethodType(meeting_app.MeetingApp._save_adhoc_type, app)
     return app
 
