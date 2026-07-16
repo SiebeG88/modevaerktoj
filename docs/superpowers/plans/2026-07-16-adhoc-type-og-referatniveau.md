@@ -815,3 +815,286 @@ EOF
 
 Kør: `gh pr checks --watch`
 Forventet: testjob grønt. (`ai-review`-checket fejler org-bredt på en udgået model — kendt støj, ignorér.)
+
+---
+
+### Task 5: Samme muligheder i "Transkribér fil"-fanen (spec §8)
+
+**Files:**
+- Modify: `meeting_app.py`:
+  - `MeetingApp._build_ui` — linjen `self._transcribe_tab = TranscribeFileTab(self._views["transkriber"])` (linje ~545)
+  - Ny metode `MeetingApp._on_transcribe_types_changed` (placér efter `_on_meeting_types_changed`)
+  - `TranscribeFileTab.__init__` — ny valgfri parameter
+  - `TranscribeFileTab._build_ui` — combo typbar + hjælpetekst + niveau-række (efter `self.type_combo.pack(fill="x", pady=(0, 10))`)
+  - `TranscribeFileTab._on_type_selected` og `refresh_meeting_types` — synk vælgeren
+  - `TranscribeFileTab._start` — brug `_resolve_meeting_type()`; synk vælgeren efter tråd-start
+  - Nye metoder: `_sync_level_seg`, `_resolve_meeting_type`
+- Test: `tests/test_adhoc_type.py` (udvid med `TestResolveMeetingType`, 5 tests)
+
+**Interfaces:**
+- Consumes: `ensure_meeting_type`, `override_detaljeniveau`, `persist_meeting_types`, `_NIVEAU_LABELS`, `_NIVEAU_KEYS` (Task 1/3); `MeetingTypesTab.TYPES_FILE`; `MeetingApp._on_meeting_types_changed`, `MeetingTypesTab.reload_from_disk` (Task 2)
+- Produces: `TranscribeFileTab._resolve_meeting_type() -> dict`; `TranscribeFileTab(parent, on_types_changed=None)`
+
+- [ ] **Step 1: Skriv de fejlende tests**
+
+Tilføj nederst i `tests/test_adhoc_type.py`:
+
+```python
+def _fake_tab(tmp_path, monkeypatch, seg_label="Kort", types=None):
+    """Minimal TranscribeFileTab-attrap: kun det _resolve_meeting_type rører."""
+    monkeypatch.setattr(
+        meeting_app.MeetingTypesTab, "TYPES_FILE", tmp_path / "meeting_types.json"
+    )
+    calls = []
+    t = types if types is not None else _types()
+    first = next(iter(t))
+    tab = SimpleNamespace(
+        _meeting_types=t,
+        _type_keys=list(t),
+        _type_key=first,
+        type_var=SimpleNamespace(_v=t[first]["navn"]),
+        _level_seg=SimpleNamespace(get=lambda: seg_label),
+        _on_types_changed=lambda: calls.append("changed"),
+        status_var=SimpleNamespace(set=lambda s: calls.append(("status", s))),
+    )
+    tab.type_var.get = lambda: tab.type_var._v
+    tab.type_var.set = lambda v: setattr(tab.type_var, "_v", v)
+    tab.calls = calls
+    tab._resolve_meeting_type = MethodType(
+        meeting_app.TranscribeFileTab._resolve_meeting_type, tab
+    )
+    return tab
+
+
+class TestResolveMeetingType:
+    def test_same_type_same_level_returns_original(self, tmp_path, monkeypatch):
+        tab = _fake_tab(tmp_path, monkeypatch, seg_label="Kort")  # driftledelse = kortfattet
+        result = tab._resolve_meeting_type()
+        assert result is tab._meeting_types["driftledelse"]
+        assert tab.calls == []
+        assert not (tmp_path / "meeting_types.json").exists()
+
+    def test_level_differs_returns_copy(self, tmp_path, monkeypatch):
+        tab = _fake_tab(tmp_path, monkeypatch, seg_label="Grundig")
+        result = tab._resolve_meeting_type()
+        assert result["detaljeniveau"] == "grundig"
+        assert tab._meeting_types["driftledelse"]["detaljeniveau"] == "kortfattet"
+        assert result is not tab._meeting_types["driftledelse"]
+
+    def test_typed_new_name_creates_persists_and_overrides(self, tmp_path, monkeypatch):
+        tab = _fake_tab(tmp_path, monkeypatch, seg_label="Grundig")
+        tab.type_var.set("Ansættelsessamtale")
+        result = tab._resolve_meeting_type()
+        assert tab._type_key == "ansaettelsessamtale"
+        assert tab.type_var.get() == "Ansættelsessamtale"
+        assert "changed" in tab.calls
+        data = json.loads((tmp_path / "meeting_types.json").read_text(encoding="utf-8"))
+        assert data["ansaettelsessamtale"]["detaljeniveau"] == "balanceret"  # typen selv
+        assert result["detaljeniveau"] == "grundig"  # kørslens kopi
+
+    def test_typed_existing_name_reuses_without_writing(self, tmp_path, monkeypatch):
+        tab = _fake_tab(tmp_path, monkeypatch, seg_label="Kort")
+        tab.type_var.set("  driftledelsesmøde ")
+        result = tab._resolve_meeting_type()
+        assert tab._type_key == "driftledelse"
+        assert not (tmp_path / "meeting_types.json").exists()
+        assert "changed" not in tab.calls
+        assert result is tab._meeting_types["driftledelse"]
+
+    def test_write_failure_keeps_type_in_memory(self, tmp_path, monkeypatch):
+        tab = _fake_tab(tmp_path, monkeypatch, seg_label="Mellem")
+        monkeypatch.setattr(meeting_app.MeetingTypesTab, "TYPES_FILE", tmp_path)  # mappe → OSError
+        tab.type_var.set("Ansættelsessamtale")
+        result = tab._resolve_meeting_type()
+        assert tab._type_key == "ansaettelsessamtale"
+        assert "ansaettelsessamtale" in tab._meeting_types
+        assert "changed" not in tab.calls
+        assert any(isinstance(c, tuple) and c[0] == "status" for c in tab.calls)
+        assert result["detaljeniveau"] == "balanceret"
+```
+
+- [ ] **Step 2: Kør testene — de skal fejle**
+
+Kør: `.venv312/bin/python -m pytest tests/test_adhoc_type.py -q`
+Forventet: 5 nye FAIL med `AttributeError: ... has no attribute '_resolve_meeting_type'`; 16 gamle passed
+
+- [ ] **Step 3: Implementér**
+
+**(a)** `TranscribeFileTab.__init__`: ændr signaturen til
+
+```python
+    def __init__(self, parent: ctk.CTkBaseClass, on_types_changed=None):
+```
+
+og tilføj efter `self.parent = parent` (eller tilsvarende første linjer):
+
+```python
+        # Kaldes når fanen opretter en ad-hoc mødetype, så andre faner opdateres.
+        self._on_types_changed = on_types_changed
+```
+
+**(b)** I `MeetingApp._build_ui` (linje ~545): erstat
+
+```python
+        self._transcribe_tab = TranscribeFileTab(self._views["transkriber"])
+```
+
+med
+
+```python
+        self._transcribe_tab = TranscribeFileTab(
+            self._views["transkriber"],
+            on_types_changed=self._on_transcribe_types_changed,
+        )
+```
+
+**(c)** Ny metode på `MeetingApp` efter `_on_meeting_types_changed`:
+
+```python
+    def _on_transcribe_types_changed(self):
+        """Callback fra Transkribér fil-fanen: en ad-hoc type blev oprettet dér."""
+        self._on_meeting_types_changed()
+        self._types_tab.reload_from_disk()
+```
+
+**(d)** I `TranscribeFileTab._build_ui`, mødetype-dropdownen: ændr `state="readonly"` til `state="normal"`, ændr `self.type_combo.pack(fill="x", pady=(0, 10))` til `pady=(0, 4)`, og indsæt derefter:
+
+```python
+        ctk.CTkLabel(
+            inner,
+            text="Skriv et nyt navn for at oprette en mødetype automatisk (gemmes ved start)",
+            font=ctk.CTkFont(size=11), text_color=_CLR["text_secondary"],
+            anchor="w", justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+
+        # -- Referatniveau (kun denne kørsel)
+        lvl_row = ctk.CTkFrame(inner, fg_color="transparent")
+        lvl_row.pack(fill="x", pady=(0, 10))
+        ctk.CTkLabel(lvl_row, text="Referat", font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=_CLR["text"], anchor="w").pack(side="left", padx=(0, 12))
+        self._level_seg = ctk.CTkSegmentedButton(
+            lvl_row, values=list(_NIVEAU_KEYS), font=ctk.CTkFont(size=13),
+            text_color=_CLR["text"], selected_color=_CLR["accent"],
+            selected_hover_color=_CLR["accent_hover"],
+            unselected_color=_CLR["card_border"], unselected_hover_color="#eef2fb")
+        self._level_seg.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(lvl_row, text="Gælder kun dette møde", font=ctk.CTkFont(size=11),
+                     text_color=_CLR["text_secondary"]).pack(side="left", padx=(12, 0))
+        self._sync_level_seg()
+```
+
+**(e)** Nye metoder på `TranscribeFileTab` (placér ved `_key_for_label`/`_on_type_selected`):
+
+```python
+    def _sync_level_seg(self):
+        """Sæt niveau-vælgeren til den valgte types eget niveau."""
+        if self._level_seg.winfo_exists():
+            self._level_seg.set(
+                _NIVEAU_LABELS[self._meeting_types[self._type_key]["detaljeniveau"]]
+            )
+
+    def _resolve_meeting_type(self) -> dict:
+        """Effektiv mødetype for denne kørsel.
+
+        Matcher det indtastede navn ingen kendt type, oprettes en ad-hoc type
+        (samme regler som i guiden: navnematch genbruger, skrivefejl → typen
+        beholdes i hukommelsen for denne kørsel). Afviger niveau-vælgeren fra
+        typens eget niveau, returneres en kopi med det valgte niveau —
+        originalen og meeting_types.json røres aldrig af selve overstyringen."""
+        navn = self.type_var.get().strip()
+        if navn and navn != self._meeting_types[self._type_key]["navn"]:
+            types, key, created = ensure_meeting_type(self._meeting_types, navn)
+            if created:
+                fejl = persist_meeting_types(types, MeetingTypesTab.TYPES_FILE)
+                self._meeting_types = types
+                self._type_keys = list(types)
+                self._type_key = key
+                if fejl is None:
+                    if self._on_types_changed is not None:
+                        self._on_types_changed()  # alle faner genindlæser fra disk
+                else:
+                    self.status_var.set(fejl)
+            else:
+                self._type_key = key
+            self.type_var.set(self._meeting_types[self._type_key]["navn"])
+        mtype = self._meeting_types[self._type_key]
+        return override_detaljeniveau(mtype, _NIVEAU_KEYS.get(self._level_seg.get()))
+```
+
+**(f)** I `TranscribeFileTab._on_type_selected`: tilføj som sidste linje
+
+```python
+        self._sync_level_seg()
+```
+
+**(g)** I `TranscribeFileTab.refresh_meeting_types`: tilføj som sidste linje
+
+```python
+        self._sync_level_seg()
+```
+
+**(h)** I `TranscribeFileTab._start`: erstat
+
+```python
+        meeting_type = self._meeting_types[self._type_key]
+```
+
+med
+
+```python
+        meeting_type = self._resolve_meeting_type()
+```
+
+og tilføj umiddelbart efter fanens `self.worker_thread.start()`:
+
+```python
+        self._sync_level_seg()  # niveau-valget gjaldt kun denne kørsel
+```
+
+- [ ] **Step 4: Kør testene — de skal bestå**
+
+Kør: `.venv312/bin/python -m pytest tests/test_adhoc_type.py -q`
+Forventet: 21 passed
+
+- [ ] **Step 5: Konstruktions-røgtest (Tk 9.x)**
+
+Som Task 3 Step 5, men for fanen: gem i `/tmp/smoke_transcribe.py` (IKKE commit), kør med `.venv312/bin/python`:
+
+```python
+"""Røgtest: Transkribér fil-fanen konstruerer med niveau-vælger + typbar combo."""
+import customtkinter as ctk
+
+class _ShimScroll(ctk.CTkFrame):
+    def __init__(self, *a, **kw):
+        kw.pop("scrollbar_button_color", None)
+        kw.pop("scrollbar_button_hover_color", None)
+        super().__init__(*a, **kw)
+
+ctk.CTkScrollableFrame = _ShimScroll
+
+import meeting_app
+
+root = ctk.CTk()
+root.withdraw()
+tab = meeting_app.TranscribeFileTab(ctk.CTkFrame(root))
+assert tab._level_seg.get() in ("Kort", "Mellem", "Grundig")
+assert tab.type_combo.cget("state") == "normal"
+mt = tab._resolve_meeting_type()          # uændret navn + typens niveau → original
+assert mt is tab._meeting_types[tab._type_key]
+print("OK: fanen konstruerer, vælger synkroniseret, resolve virker")
+root.destroy()
+```
+
+Forventet: `OK: ...` og exit 0. (Scriptet opretter ingen typer — navnet er uændret.)
+
+- [ ] **Step 6: Kør hele suiten**
+
+Kør: `.venv312/bin/python -m pytest tests/ -q`
+Forventet: 346 passed, 4 skipped
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add meeting_app.py tests/test_adhoc_type.py
+git commit -m "feat: ad-hoc mødetype + referatniveau-vælger i Transkribér fil-fanen"
+```
