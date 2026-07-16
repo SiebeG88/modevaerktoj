@@ -2899,6 +2899,9 @@ class TranscribeFileTab:
         beholdes i hukommelsen for denne kørsel). Afviger niveau-vælgeren fra
         typens eget niveau, returneres en kopi med det valgte niveau —
         originalen og meeting_types.json røres aldrig af selve overstyringen."""
+        # Aflæs niveau-valget FØR evt. oprettelse: on_types_changed-kæden
+        # genindlæser fanen og nulstiller vælgeren til typens eget niveau.
+        niveau = _NIVEAU_KEYS.get(self._level_seg.get())
         navn = self.type_var.get().strip()
         if navn and navn != self._meeting_types[self._type_key]["navn"]:
             types, key, created = ensure_meeting_type(self._meeting_types, navn)
@@ -2916,7 +2919,7 @@ class TranscribeFileTab:
                 self._type_key = key
             self.type_var.set(self._meeting_types[self._type_key]["navn"])
         mtype = self._meeting_types[self._type_key]
-        return override_detaljeniveau(mtype, _NIVEAU_KEYS.get(self._level_seg.get()))
+        return override_detaljeniveau(mtype, niveau)
 
     def _on_type_selected(self, label: str):
         self._type_key = self._key_for_label(label)

@@ -182,9 +182,17 @@ def _fake_tab(tmp_path, monkeypatch, seg_label="Kort", types=None):
         _type_key=first,
         type_var=SimpleNamespace(_v=t[first]["navn"]),
         _level_seg=SimpleNamespace(get=lambda: seg_label),
-        _on_types_changed=lambda: calls.append("changed"),
         status_var=SimpleNamespace(set=lambda s: calls.append(("status", s))),
     )
+
+    def _on_types_changed():
+        calls.append("changed")
+        # Spejl den virkelige kæde: refresh_meeting_types → _sync_level_seg
+        # nulstiller vælgeren til typens eget niveau.
+        tab._level_seg.get = lambda: meeting_app._NIVEAU_LABELS[
+            tab._meeting_types[tab._type_key]["detaljeniveau"]
+        ]
+    tab._on_types_changed = _on_types_changed
     tab.type_var.get = lambda: tab.type_var._v
     tab.type_var.set = lambda v: setattr(tab.type_var, "_v", v)
     tab.calls = calls
