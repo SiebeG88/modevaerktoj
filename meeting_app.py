@@ -542,7 +542,10 @@ class MeetingApp:
         self._build_record_screen(self._views["optag"])
 
         # Transkribér fil-viewet.
-        self._transcribe_tab = TranscribeFileTab(self._views["transkriber"])
+        self._transcribe_tab = TranscribeFileTab(
+            self._views["transkriber"],
+            on_types_changed=self._on_transcribe_types_changed,
+        )
 
         # Historik-viewet.
         self._historik_tab = HistorikTab(self._views["historik"], self)
@@ -1313,6 +1316,11 @@ class MeetingApp:
         """Callback fra Mødetyper-fanen: opdatér begge mødetype-dropdowns."""
         self.refresh_meeting_types()
         self._transcribe_tab.refresh_meeting_types()
+
+    def _on_transcribe_types_changed(self):
+        """Callback fra Transkribér fil-fanen: en ad-hoc type blev oprettet dér."""
+        self._on_meeting_types_changed()
+        self._types_tab.reload_from_disk()
 
     # ------------------------------------------------------------------
     # Defaults
@@ -2486,8 +2494,10 @@ class TranscribeFileTab:
         ("Alle filer", "*.*"),
     ]
 
-    def __init__(self, parent: ctk.CTkBaseClass):
+    def __init__(self, parent: ctk.CTkBaseClass, on_types_changed=None):
         self.parent = parent
+        # Kaldes når fanen opretter en ad-hoc mødetype, så andre faner opdateres.
+        self._on_types_changed = on_types_changed
         self._input_path: Path | None = None
         self.processing = False
         self.worker_thread: threading.Thread | None = None
@@ -2626,7 +2636,7 @@ class TranscribeFileTab:
             corner_radius=10,
             border_width=1,
             border_color=_CLR["card_border"],
-            state="readonly",
+            state="normal",
             fg_color="#ffffff",
             button_color=_CLR["accent"],
             button_hover_color=_CLR["accent_hover"],
@@ -2636,7 +2646,28 @@ class TranscribeFileTab:
             font=ctk.CTkFont(size=13),
             command=self._on_type_selected,
         )
-        self.type_combo.pack(fill="x", pady=(0, 10))
+        self.type_combo.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(
+            inner,
+            text="Skriv et nyt navn for at oprette en mødetype automatisk (gemmes ved start)",
+            font=ctk.CTkFont(size=11), text_color=_CLR["text_secondary"],
+            anchor="w", justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+
+        # -- Referatniveau (kun denne kørsel)
+        lvl_row = ctk.CTkFrame(inner, fg_color="transparent")
+        lvl_row.pack(fill="x", pady=(0, 10))
+        ctk.CTkLabel(lvl_row, text="Referat", font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=_CLR["text"], anchor="w").pack(side="left", padx=(0, 12))
+        self._level_seg = ctk.CTkSegmentedButton(
+            lvl_row, values=list(_NIVEAU_KEYS), font=ctk.CTkFont(size=13),
+            text_color=_CLR["text"], selected_color=_CLR["accent"],
+            selected_hover_color=_CLR["accent_hover"],
+            unselected_color=_CLR["card_border"], unselected_hover_color="#eef2fb")
+        self._level_seg.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(lvl_row, text="Gælder kun dette møde", font=ctk.CTkFont(size=11),
+                     text_color=_CLR["text_secondary"]).pack(side="left", padx=(12, 0))
+        self._sync_level_seg()
 
         # -- Mødenavn
         MeetingApp._field_label(inner, "Mødenavn")
@@ -2853,6 +2884,40 @@ class TranscribeFileTab:
                 return k
         return self._type_keys[0]
 
+    def _sync_level_seg(self):
+        """Sæt niveau-vælgeren til den valgte types eget niveau."""
+        if self._level_seg.winfo_exists():
+            self._level_seg.set(
+                _NIVEAU_LABELS[self._meeting_types[self._type_key]["detaljeniveau"]]
+            )
+
+    def _resolve_meeting_type(self) -> dict:
+        """Effektiv mødetype for denne kørsel.
+
+        Matcher det indtastede navn ingen kendt type, oprettes en ad-hoc type
+        (samme regler som i guiden: navnematch genbruger, skrivefejl → typen
+        beholdes i hukommelsen for denne kørsel). Afviger niveau-vælgeren fra
+        typens eget niveau, returneres en kopi med det valgte niveau —
+        originalen og meeting_types.json røres aldrig af selve overstyringen."""
+        navn = self.type_var.get().strip()
+        if navn and navn != self._meeting_types[self._type_key]["navn"]:
+            types, key, created = ensure_meeting_type(self._meeting_types, navn)
+            if created:
+                fejl = persist_meeting_types(types, MeetingTypesTab.TYPES_FILE)
+                self._meeting_types = types
+                self._type_keys = list(types)
+                self._type_key = key
+                if fejl is None:
+                    if self._on_types_changed is not None:
+                        self._on_types_changed()  # alle faner genindlæser fra disk
+                else:
+                    self.status_var.set(fejl)
+            else:
+                self._type_key = key
+            self.type_var.set(self._meeting_types[self._type_key]["navn"])
+        mtype = self._meeting_types[self._type_key]
+        return override_detaljeniveau(mtype, _NIVEAU_KEYS.get(self._level_seg.get()))
+
     def _on_type_selected(self, label: str):
         self._type_key = self._key_for_label(label)
         mtype = self._meeting_types[self._type_key]
@@ -2864,6 +2929,7 @@ class TranscribeFileTab:
             DEFAULT_ATTENDEES,
         )
         self.attendees_var.set(", ".join(attendees))
+        self._sync_level_seg()
 
     def refresh_meeting_types(self):
         """Genindlæs mødetyper fra disk og opdatér dropdownen.
@@ -2879,6 +2945,7 @@ class TranscribeFileTab:
         labels = [self._meeting_types[k]["navn"] for k in self._type_keys]
         self.type_combo.configure(values=labels)
         self.type_var.set(self._meeting_types[self._type_key]["navn"])
+        self._sync_level_seg()
 
     def _load_defaults(self):
         state = load_state()
@@ -2982,7 +3049,7 @@ class TranscribeFileTab:
         ] or list(DEFAULT_ATTENDEES)
         engine = self.engine_var.get()
         make_minutes = self.minutes_var.get()
-        meeting_type = self._meeting_types[self._type_key]
+        meeting_type = self._resolve_meeting_type()
 
         # Husk valg til næste gang — merge med eksisterende state
         _saved = load_state()
@@ -3019,6 +3086,7 @@ class TranscribeFileTab:
             daemon=True,
         )
         self.worker_thread.start()
+        self._sync_level_seg()  # niveau-valget gjaldt kun denne kørsel
 
     def _run(self, input_path, output_dir, date, name, attendees, engine,
              make_minutes, meeting_type=None):

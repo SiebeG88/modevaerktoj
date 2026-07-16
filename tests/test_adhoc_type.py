@@ -166,3 +166,76 @@ class TestClearMeetingFields:
         app._clear_meeting_fields()
         # Bekræft at overstyringen blev nulstillet
         assert app.referat_level_override is None
+
+
+def _fake_tab(tmp_path, monkeypatch, seg_label="Kort", types=None):
+    """Minimal TranscribeFileTab-attrap: kun det _resolve_meeting_type rører."""
+    monkeypatch.setattr(
+        meeting_app.MeetingTypesTab, "TYPES_FILE", tmp_path / "meeting_types.json"
+    )
+    calls = []
+    t = types if types is not None else _types()
+    first = next(iter(t))
+    tab = SimpleNamespace(
+        _meeting_types=t,
+        _type_keys=list(t),
+        _type_key=first,
+        type_var=SimpleNamespace(_v=t[first]["navn"]),
+        _level_seg=SimpleNamespace(get=lambda: seg_label),
+        _on_types_changed=lambda: calls.append("changed"),
+        status_var=SimpleNamespace(set=lambda s: calls.append(("status", s))),
+    )
+    tab.type_var.get = lambda: tab.type_var._v
+    tab.type_var.set = lambda v: setattr(tab.type_var, "_v", v)
+    tab.calls = calls
+    tab._resolve_meeting_type = MethodType(
+        meeting_app.TranscribeFileTab._resolve_meeting_type, tab
+    )
+    return tab
+
+
+class TestResolveMeetingType:
+    def test_same_type_same_level_returns_original(self, tmp_path, monkeypatch):
+        tab = _fake_tab(tmp_path, monkeypatch, seg_label="Kort")  # driftledelse = kortfattet
+        result = tab._resolve_meeting_type()
+        assert result is tab._meeting_types["driftledelse"]
+        assert tab.calls == []
+        assert not (tmp_path / "meeting_types.json").exists()
+
+    def test_level_differs_returns_copy(self, tmp_path, monkeypatch):
+        tab = _fake_tab(tmp_path, monkeypatch, seg_label="Grundig")
+        result = tab._resolve_meeting_type()
+        assert result["detaljeniveau"] == "grundig"
+        assert tab._meeting_types["driftledelse"]["detaljeniveau"] == "kortfattet"
+        assert result is not tab._meeting_types["driftledelse"]
+
+    def test_typed_new_name_creates_persists_and_overrides(self, tmp_path, monkeypatch):
+        tab = _fake_tab(tmp_path, monkeypatch, seg_label="Grundig")
+        tab.type_var.set("Ansættelsessamtale")
+        result = tab._resolve_meeting_type()
+        assert tab._type_key == "ansaettelsessamtale"
+        assert tab.type_var.get() == "Ansættelsessamtale"
+        assert "changed" in tab.calls
+        data = json.loads((tmp_path / "meeting_types.json").read_text(encoding="utf-8"))
+        assert data["ansaettelsessamtale"]["detaljeniveau"] == "balanceret"  # typen selv
+        assert result["detaljeniveau"] == "grundig"  # kørslens kopi
+
+    def test_typed_existing_name_reuses_without_writing(self, tmp_path, monkeypatch):
+        tab = _fake_tab(tmp_path, monkeypatch, seg_label="Kort")
+        tab.type_var.set("  driftledelsesmøde ")
+        result = tab._resolve_meeting_type()
+        assert tab._type_key == "driftledelse"
+        assert not (tmp_path / "meeting_types.json").exists()
+        assert "changed" not in tab.calls
+        assert result is tab._meeting_types["driftledelse"]
+
+    def test_write_failure_keeps_type_in_memory(self, tmp_path, monkeypatch):
+        tab = _fake_tab(tmp_path, monkeypatch, seg_label="Mellem")
+        monkeypatch.setattr(meeting_app.MeetingTypesTab, "TYPES_FILE", tmp_path)  # mappe → OSError
+        tab.type_var.set("Ansættelsessamtale")
+        result = tab._resolve_meeting_type()
+        assert tab._type_key == "ansaettelsessamtale"
+        assert "ansaettelsessamtale" in tab._meeting_types
+        assert "changed" not in tab.calls
+        assert any(isinstance(c, tuple) and c[0] == "status" for c in tab.calls)
+        assert result["detaljeniveau"] == "balanceret"
