@@ -109,10 +109,27 @@ def download_and_stage(release: Release, staging_dir) -> Path:
     return staging_dir
 
 
+def _ps_quote(value) -> str:
+    """Escapér en sti/streng til et PowerShell single-quoted literal."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def apply_and_restart(staging_dir) -> None:  # pragma: no cover
-    """Pak staging-zip ud, skriv en detached helper-.cmd der venter på at denne
-    proces lukker (fil-låsen frigives), erstatter app-mappen og genstarter exe'en.
-    Kald derefter sys.exit(). Kun meningsfuld på frosset Windows."""
+    """Pak staging-zip ud og swap app-mappen via en detached PowerShell-helper,
+    der venter på at denne proces lukker (fil-låsen frigives), tager backup af
+    den gamle mappe, installerer den nye og genstarter exe'en. Ruller tilbage
+    hvis den nye exe mangler. Afslut derefter processen HÅRDT med os._exit().
+
+    Hvorfor PowerShell og ikke en .cmd: app-mappen ligger under
+    …\\Programs\\Mødeværktøj — en sti med 'ø'/'æ'. En batch-.cmd kan IKKE
+    håndtere non-ASCII stier pålideligt (selv med chcp 65001 korrumperes
+    rmdir/move → forkert mappe, opdatering fejler). PowerShell håndterer
+    Unicode-stier nativt, og -EncodedCommand undgår både fil-encoding og
+    ExecutionPolicy. os._exit() bruges frem for sys.exit(), fordi SystemExit
+    i et Tkinter after-callback ikke afslutter en frosset (vinduesløs) app
+    pålideligt — så ville helperens vente-løkke aldrig se PID'et forsvinde
+    ('søger i det uendelige'). Kun meningsfuld på frosset Windows."""
+    import base64
     import os
     import subprocess
     import sys
@@ -122,29 +139,56 @@ def apply_and_restart(staging_dir) -> None:  # pragma: no cover
 
     staging_dir = Path(staging_dir)
     new_dir = staging_dir / "new"
-    new_dir.mkdir(exist_ok=True)
+    # Ryd et evt. tidligere (mislykket) forsøg, så vi ikke fletter gammelt indhold.
+    if new_dir.exists():
+        import shutil
+        shutil.rmtree(new_dir, ignore_errors=True)
+    new_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(staging_dir / "app.zip") as zf:
         zf.extractall(new_dir)
 
     app_root = app_paths.app_dir()            # …\Mødeværktøj
     exe_path = Path(sys.executable)           # …\Mødeværktøj\Mødeværktøj.exe
+    log_path = app_paths.user_config_dir() / "ota-update.log"  # overlever swap
     pid = os.getpid()
 
-    cmd_path = staging_dir / "apply_update.cmd"
-    cmd_path.write_text(
-        "@echo off\r\n"
-        ":wait\r\n"
-        f'tasklist /FI "PID eq {pid}" | find "{pid}" >nul && (timeout /t 1 >nul & goto wait)\r\n'
-        f'rmdir /s /q "{app_root}"\r\n'
-        f'move "{new_dir}" "{app_root}"\r\n'
-        f'start "" "{exe_path}"\r\n'
-        'del "%~f0"\r\n',
-        encoding="utf-8",
+    # $procId — IKKE $pid: $PID er en skrivebeskyttet auto-variabel i PowerShell.
+    ps_script = (
+        "$ErrorActionPreference='SilentlyContinue'\n"
+        f"$log={_ps_quote(log_path)}; $appRoot={_ps_quote(app_root)}; "
+        f"$newDir={_ps_quote(new_dir)}; $exe={_ps_quote(exe_path)}; $procId={pid}\n"
+        "$parent=Split-Path -Parent $appRoot; $leaf=Split-Path -Leaf $appRoot\n"
+        "$bak=Join-Path $parent ($leaf + '.ota-bak')\n"
+        "function L($m){ \"$(Get-Date -Format o) $m\" | Out-File -FilePath $log -Append -Encoding utf8 }\n"
+        "L \"OTA start; venter paa pid $procId\"\n"
+        "while (Get-Process -Id $procId -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 1 }\n"
+        "L 'proces afsluttet; bytter app-mappe'\n"
+        "if (Test-Path -LiteralPath $bak) { Remove-Item -LiteralPath $bak -Recurse -Force }\n"
+        "$moved=$false\n"
+        "for ($i=0; $i -lt 20; $i++) {\n"
+        "  try { Move-Item -LiteralPath $appRoot -Destination $bak -ErrorAction Stop; $moved=$true; break }\n"
+        "  catch { Start-Sleep -Seconds 1 }\n"
+        "}\n"
+        "if (-not $moved) { L 'FEJL: kunne ikke frigive app-mappe; genstarter uaendret'; Start-Process -FilePath $exe; return }\n"
+        "Move-Item -LiteralPath $newDir -Destination $appRoot -Force\n"
+        "if (Test-Path -LiteralPath $exe) {\n"
+        "  L 'opdatering ok; genstarter'\n"
+        "  Remove-Item -LiteralPath $bak -Recurse -Force\n"
+        "  Start-Process -FilePath $exe\n"
+        "} else {\n"
+        "  L 'FEJL: ny exe mangler; ruller tilbage'\n"
+        "  if (Test-Path -LiteralPath $appRoot) { Remove-Item -LiteralPath $appRoot -Recurse -Force }\n"
+        "  Move-Item -LiteralPath $bak -Destination $appRoot\n"
+        "  Start-Process -FilePath $exe\n"
+        "}\n"
     )
+    encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
     subprocess.Popen(
-        ["cmd", "/c", str(cmd_path)],
+        ["powershell", "-NoProfile", "-NonInteractive",
+         "-WindowStyle", "Hidden", "-EncodedCommand", encoded],
         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
         close_fds=True,
     )
-    sys.exit(0)
+    # Hård afslutning: garanterer at PID'et forsvinder, så helperen kan swappe.
+    os._exit(0)

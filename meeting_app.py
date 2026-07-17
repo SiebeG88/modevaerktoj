@@ -1239,7 +1239,9 @@ class MeetingApp:
                 root.after(0, lambda: self._update_finished(
                     f"Du har allerede den nyeste version (v{__version__})."))
                 return
-            root.after(0, lambda: self.status_var.set(f"Henter {rel.tag}…"))
+            root.after(0, lambda: (
+                self.status_var.set(f"Henter {rel.tag}… (kan tage et par minutter)"),
+                self._update_btn.configure(text="Henter…")))
             try:
                 staging = updater.download_and_stage(
                     rel, Path(tempfile.gettempdir()) / "modevaerktoj-update")
