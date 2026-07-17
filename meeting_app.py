@@ -20,6 +20,7 @@ import json
 import math
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -497,6 +498,10 @@ class MeetingApp:
             self._type_key = next(iter(self._meeting_types))
         self._type_keys = list(self._meeting_types)
 
+        # Referatniveau-overstyring for det NÆSTE møde (None = følg typen).
+        # Sættes i guidens trin 2; nulstilles ved typeskift og efter start.
+        self.referat_level_override: str | None = None
+
         # Configure the window background
         self.root.configure(fg_color=_CLR["bg"])
 
@@ -537,7 +542,10 @@ class MeetingApp:
         self._build_record_screen(self._views["optag"])
 
         # Transkribér fil-viewet.
-        self._transcribe_tab = TranscribeFileTab(self._views["transkriber"])
+        self._transcribe_tab = TranscribeFileTab(
+            self._views["transkriber"],
+            on_types_changed=self._on_transcribe_types_changed,
+        )
 
         # Historik-viewet.
         self._historik_tab = HistorikTab(self._views["historik"], self)
@@ -1059,13 +1067,14 @@ class MeetingApp:
         _set("folder", self.folder_var.get())
 
     def _clear_meeting_fields(self):
-        """Nulstil de mødespecifikke felter (mødeform, type, navn, deltagere),
+        """Nulstil de mødespecifikke felter (mødeform, type, navn, deltagere, referatniveau),
         så opsummeringen står tom når wizarden springes over. Tekniske
         indstillinger (motor, mikrofon, mappe) bevares."""
         self.meeting_form_var.set("")
         self.type_var.set("")
         self.name_var.set("")
         self.attendees_var.set("")
+        self.referat_level_override = None
         self._refresh_summary()
 
     def _open_wizard(self, start_step=0):
@@ -1258,6 +1267,7 @@ class MeetingApp:
         return self._type_keys[0]
 
     def _on_type_selected(self, label: str):
+        self.referat_level_override = None  # nyt typevalg → følg typens niveau
         self._type_key = self._key_for_label(label)
         mtype = self._meeting_types[self._type_key]
         self.name_var.set(f"{mtype['navn']} {self.date_var.get()}")
@@ -1282,10 +1292,35 @@ class MeetingApp:
             self._type_key = self._type_keys[0]
         self.type_var.set(self._meeting_types[self._type_key]["navn"])
 
+    def _save_adhoc_type(self, navn: str) -> str:
+        """Opret (eller genbrug) en mødetype ud fra et ad-hoc navn fra guiden.
+
+        Ny type gemmes i meeting_types.json og alle dropdowns/faner
+        opdateres. Kan filen ikke skrives, beholdes typen i hukommelsen så
+        DETTE møde stadig kan startes — den er blot ikke gemt til næste gang
+        (jf. spec §6). Returnerer typens nøgle."""
+        types, key, created = ensure_meeting_type(self._meeting_types, navn)
+        if not created:
+            return key
+        fejl = persist_meeting_types(types, MeetingTypesTab.TYPES_FILE)
+        if fejl is None:
+            self._on_meeting_types_changed()      # genindlæser alt fra disk
+            self._types_tab.reload_from_disk()    # Mødetyper-fanens kopi
+        else:
+            self._meeting_types = types
+            self._type_keys = list(types)
+            self.status_var.set(fejl)
+        return key
+
     def _on_meeting_types_changed(self):
         """Callback fra Mødetyper-fanen: opdatér begge mødetype-dropdowns."""
         self.refresh_meeting_types()
         self._transcribe_tab.refresh_meeting_types()
+
+    def _on_transcribe_types_changed(self):
+        """Callback fra Transkribér fil-fanen: en ad-hoc type blev oprettet dér."""
+        self._on_meeting_types_changed()
+        self._types_tab.reload_from_disk()
 
     # ------------------------------------------------------------------
     # Defaults
@@ -1498,7 +1533,10 @@ class MeetingApp:
         gen_minutes = self.minutes_var.get()
         engine = self.engine_var.get()
         system_audio = self.system_audio_var.get()
-        meeting_type = self._meeting_types[self._type_key]
+        # Pr.-møde-overstyring af referatniveau: kopi af typen, original røres ikke
+        meeting_type = override_detaljeniveau(
+            self._meeting_types[self._type_key], self.referat_level_override
+        )
 
         self._log(f"Motor: {engine}")
         self._log("")
@@ -1509,6 +1547,7 @@ class MeetingApp:
             daemon=True,
         )
         self.worker_thread.start()
+        self.referat_level_override = None  # gjaldt kun dette møde
 
     def _stop_recording(self):
         if not self.recording:
@@ -2026,6 +2065,75 @@ class VocabularyTab:
         self.parent.after(3000, lambda: self._status_label.configure(text=""))
 
 
+# ---------------------------------------------------------------------------
+# Ad-hoc mødetyper (oprettes direkte fra guidens trin 2)
+# ---------------------------------------------------------------------------
+
+_SLUG_TRANS = str.maketrans({"æ": "ae", "ø": "oe", "å": "aa"})
+
+
+def _slugify_type_name(navn: str) -> str:
+    """Nøgle af et typenavn: små bogstaver, æ/ø/å translittereret,
+    alt ikke-alfanumerisk → '-'. Tomt resultat → 'type'."""
+    s = navn.strip().lower().translate(_SLUG_TRANS)
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s or "type"
+
+
+# Etiketter i guidens niveau-vælger ↔ interne niveauer
+_NIVEAU_LABELS = {"kortfattet": "Kort", "balanceret": "Mellem", "grundig": "Grundig"}
+_NIVEAU_KEYS = {v: k for k, v in _NIVEAU_LABELS.items()}
+
+
+def ensure_meeting_type(types: dict, navn: str) -> tuple[dict, str, bool]:
+    """Slå navnet op (trimmet, case-insensitivt) i types; findes det,
+    genbruges den eksisterende type — der oprettes aldrig dubletter, og
+    eksisterende typer overskrives aldrig. Ellers oprettes en ny type med
+    standardværdier (jf. spec §3); slug-kollision får talsuffiks (-2, -3, …).
+
+    Returnerer (types, nøgle, oprettet). Ved oprettelse returneres en NY
+    dict — den givne muteres aldrig."""
+    target = navn.strip()
+    if not target:
+        raise ValueError("Tomt typenavn")
+    folded = target.casefold()
+    for k, t in types.items():
+        if t.get("navn", "").strip().casefold() == folded:
+            return types, k, False
+    key = base = _slugify_type_name(target)
+    n = 2
+    while key in types:
+        key = f"{base}-{n}"
+        n += 1
+    new_types = dict(types)
+    new_types[key] = meeting_tool._normalize_meeting_type({"navn": target})
+    return new_types, key, True
+
+
+def override_detaljeniveau(mtype: dict, niveau: str | None) -> dict:
+    """Kopi af mtype med detaljeniveau erstattet — kun hvis niveau er gyldigt
+    og forskelligt fra typens eget. Ellers returneres mtype uændret (samme
+    objekt). Originalen muteres aldrig, så typen i self._meeting_types og
+    meeting_types.json påvirkes ikke."""
+    if niveau not in meeting_tool.DETALJENIVEAUER or mtype.get("detaljeniveau") == niveau:
+        return mtype
+    out = dict(mtype)
+    out["detaljeniveau"] = niveau
+    return out
+
+
+def persist_meeting_types(types: dict, path: Path) -> str | None:
+    """Skriv types til path (samme format som Mødetyper-fanen).
+    Returnerer None ved succes, ellers en dansk fejlbesked."""
+    try:
+        path.write_text(
+            json.dumps(types, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return None
+    except OSError as e:
+        return f"Kunne ikke gemme: {e}"
+
+
 class MeetingTypesTab:
     """Mødetyper-fane: opret, redigér og slet mødetyper. Læser/gemmer
     meeting_types.json i CONFIG_DIR (spejler VocabularyTab)."""
@@ -2320,6 +2428,15 @@ class MeetingTypesTab:
         except OSError as e:
             self._set_status(f"Kunne ikke gemme: {e}")
 
+    def reload_from_disk(self):
+        """Genindlæs typer fra disk (fx efter ad-hoc oprettelse i guiden), så
+        et senere Gem her i fanen ikke overskriver med en forældet kopi.
+        Bevarer markeringen hvis nøglen stadig findes."""
+        self.types = meeting_tool.load_meeting_types(CONFIG_DIR)
+        if self.current_key not in self.types:
+            self.current_key = next(iter(self.types))
+        self._load_into_form(self.current_key)  # kalder også _refresh_selector
+
     def _save(self):
         new_type = self._form_to_type()
         new_navn = new_type["navn"]
@@ -2377,8 +2494,10 @@ class TranscribeFileTab:
         ("Alle filer", "*.*"),
     ]
 
-    def __init__(self, parent: ctk.CTkBaseClass):
+    def __init__(self, parent: ctk.CTkBaseClass, on_types_changed=None):
         self.parent = parent
+        # Kaldes når fanen opretter en ad-hoc mødetype, så andre faner opdateres.
+        self._on_types_changed = on_types_changed
         self._input_path: Path | None = None
         self.processing = False
         self.worker_thread: threading.Thread | None = None
@@ -2517,7 +2636,7 @@ class TranscribeFileTab:
             corner_radius=10,
             border_width=1,
             border_color=_CLR["card_border"],
-            state="readonly",
+            state="normal",
             fg_color="#ffffff",
             button_color=_CLR["accent"],
             button_hover_color=_CLR["accent_hover"],
@@ -2527,7 +2646,28 @@ class TranscribeFileTab:
             font=ctk.CTkFont(size=13),
             command=self._on_type_selected,
         )
-        self.type_combo.pack(fill="x", pady=(0, 10))
+        self.type_combo.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(
+            inner,
+            text="Skriv et nyt navn for at oprette en mødetype automatisk (gemmes ved start)",
+            font=ctk.CTkFont(size=11), text_color=_CLR["text_secondary"],
+            anchor="w", justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+
+        # -- Referatniveau (kun denne kørsel)
+        lvl_row = ctk.CTkFrame(inner, fg_color="transparent")
+        lvl_row.pack(fill="x", pady=(0, 10))
+        ctk.CTkLabel(lvl_row, text="Referat", font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=_CLR["text"], anchor="w").pack(side="left", padx=(0, 12))
+        self._level_seg = ctk.CTkSegmentedButton(
+            lvl_row, values=list(_NIVEAU_KEYS), font=ctk.CTkFont(size=13),
+            text_color=_CLR["text"], selected_color=_CLR["accent"],
+            selected_hover_color=_CLR["accent_hover"],
+            unselected_color=_CLR["card_border"], unselected_hover_color="#eef2fb")
+        self._level_seg.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(lvl_row, text="Gælder kun dette møde", font=ctk.CTkFont(size=11),
+                     text_color=_CLR["text_secondary"]).pack(side="left", padx=(12, 0))
+        self._sync_level_seg()
 
         # -- Mødenavn
         MeetingApp._field_label(inner, "Mødenavn")
@@ -2744,6 +2884,43 @@ class TranscribeFileTab:
                 return k
         return self._type_keys[0]
 
+    def _sync_level_seg(self):
+        """Sæt niveau-vælgeren til den valgte types eget niveau."""
+        if self._level_seg.winfo_exists():
+            self._level_seg.set(
+                _NIVEAU_LABELS[self._meeting_types[self._type_key]["detaljeniveau"]]
+            )
+
+    def _resolve_meeting_type(self) -> dict:
+        """Effektiv mødetype for denne kørsel.
+
+        Matcher det indtastede navn ingen kendt type, oprettes en ad-hoc type
+        (samme regler som i guiden: navnematch genbruger, skrivefejl → typen
+        beholdes i hukommelsen for denne kørsel). Afviger niveau-vælgeren fra
+        typens eget niveau, returneres en kopi med det valgte niveau —
+        originalen og meeting_types.json røres aldrig af selve overstyringen."""
+        # Aflæs niveau-valget FØR evt. oprettelse: on_types_changed-kæden
+        # genindlæser fanen og nulstiller vælgeren til typens eget niveau.
+        niveau = _NIVEAU_KEYS.get(self._level_seg.get())
+        navn = self.type_var.get().strip()
+        if navn and navn != self._meeting_types[self._type_key]["navn"]:
+            types, key, created = ensure_meeting_type(self._meeting_types, navn)
+            if created:
+                fejl = persist_meeting_types(types, MeetingTypesTab.TYPES_FILE)
+                self._meeting_types = types
+                self._type_keys = list(types)
+                self._type_key = key
+                if fejl is None:
+                    if self._on_types_changed is not None:
+                        self._on_types_changed()  # alle faner genindlæser fra disk
+                else:
+                    self.status_var.set(fejl)
+            else:
+                self._type_key = key
+            self.type_var.set(self._meeting_types[self._type_key]["navn"])
+        mtype = self._meeting_types[self._type_key]
+        return override_detaljeniveau(mtype, niveau)
+
     def _on_type_selected(self, label: str):
         self._type_key = self._key_for_label(label)
         mtype = self._meeting_types[self._type_key]
@@ -2755,6 +2932,7 @@ class TranscribeFileTab:
             DEFAULT_ATTENDEES,
         )
         self.attendees_var.set(", ".join(attendees))
+        self._sync_level_seg()
 
     def refresh_meeting_types(self):
         """Genindlæs mødetyper fra disk og opdatér dropdownen.
@@ -2770,6 +2948,7 @@ class TranscribeFileTab:
         labels = [self._meeting_types[k]["navn"] for k in self._type_keys]
         self.type_combo.configure(values=labels)
         self.type_var.set(self._meeting_types[self._type_key]["navn"])
+        self._sync_level_seg()
 
     def _load_defaults(self):
         state = load_state()
@@ -2873,7 +3052,7 @@ class TranscribeFileTab:
         ] or list(DEFAULT_ATTENDEES)
         engine = self.engine_var.get()
         make_minutes = self.minutes_var.get()
-        meeting_type = self._meeting_types[self._type_key]
+        meeting_type = self._resolve_meeting_type()
 
         # Husk valg til næste gang — merge med eksisterende state
         _saved = load_state()
@@ -2910,6 +3089,7 @@ class TranscribeFileTab:
             daemon=True,
         )
         self.worker_thread.start()
+        self._sync_level_seg()  # niveau-valget gjaldt kun denne kørsel
 
     def _run(self, input_path, output_dir, date, name, attendees, engine,
              make_minutes, meeting_type=None):
@@ -3034,6 +3214,8 @@ class MeetingWizard(ctk.CTkToplevel):
         self.transient(app.root)
         self._step = 0
         self._type_keys = list(app._meeting_types)
+        self._adhoc_var = ctk.StringVar()  # navn til ad-hoc mødetype (trin 2)
+        self._adhoc_active = False
 
         W, H = 560, 600
         self.geometry(f"{W}x{H}")
@@ -3159,6 +3341,8 @@ class MeetingWizard(ctk.CTkToplevel):
             self.go_to(self._step - 1)
 
     def _next(self):
+        if self.STEPS[self._step] == "type":
+            self._commit_adhoc_type()
         if self._step < len(self.STEPS) - 1:
             self.go_to(self._step + 1)
         else:
@@ -3257,19 +3441,115 @@ class MeetingWizard(ctk.CTkToplevel):
                          text_color=_CLR["accent"], anchor="w").pack(anchor="w", pady=(6, 0))
             _bind_recursive(c, lambda e, k=key: self._select_type(k))
             self._type_cards[key] = c
-        self._highlight_type(self.app._type_key)
+
+        # "+ Ny mødetype": skriv et navn — typen oprettes automatisk med
+        # standardværdier når du går videre (spec §3).
+        c = ctk.CTkFrame(wrap, fg_color=_CLR["card"], corner_radius=14,
+                         border_width=2, border_color=_CLR["card_border"])
+        c.pack(fill="x", pady=6, padx=2)
+        inner = ctk.CTkFrame(c, fg_color="transparent")
+        inner.pack(fill="x", padx=18, pady=14)
+        self._adhoc_check = self._add_check(inner)
+        txt = ctk.CTkFrame(inner, fg_color="transparent")
+        txt.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(txt, text="+ Ny mødetype", font=ctk.CTkFont(size=15, weight="bold"),
+                     text_color=_CLR["text"], anchor="w").pack(anchor="w")
+        adhoc_entry = ctk.CTkEntry(
+            txt, textvariable=self._adhoc_var, height=34, corner_radius=8,
+            placeholder_text="Skriv navnet, fx Ansættelsessamtale",
+            border_width=1, border_color=_CLR["card_border"], fg_color="#ffffff",
+            text_color=_CLR["text"], placeholder_text_color=_CLR["text_placeholder"],
+            font=ctk.CTkFont(size=13))
+        adhoc_entry.pack(fill="x", pady=(6, 0))
+        ctk.CTkLabel(txt, text="Oprettes med standardindstillinger — kan rettes i Indstillinger → Mødetyper",
+                     font=ctk.CTkFont(size=11), text_color=_CLR["text_secondary"],
+                     anchor="w", justify="left", wraplength=430).pack(anchor="w", pady=(4, 0))
+        self._adhoc_card = c
+        adhoc_entry.bind("<FocusIn>", lambda e: self._select_adhoc())
+        adhoc_entry.bind("<KeyRelease>", lambda e: self._select_adhoc())
+        _bind_recursive(c, lambda e: self._select_adhoc())
+
+        # Referatniveau for DETTE møde (overstyrer typens detaljeniveau)
+        lvl_row = ctk.CTkFrame(self._body, fg_color="transparent")
+        lvl_row.pack(fill="x", pady=(10, 0))
+        ctk.CTkLabel(lvl_row, text="Referat", font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=_CLR["text"], anchor="w").pack(side="left", padx=(2, 12))
+        self._level_seg = ctk.CTkSegmentedButton(
+            lvl_row, values=list(_NIVEAU_KEYS), font=ctk.CTkFont(size=13),
+            text_color=_CLR["text"], selected_color=_CLR["accent"],
+            selected_hover_color=_CLR["accent_hover"],
+            unselected_color=_CLR["card_border"], unselected_hover_color="#eef2fb",
+            command=self._on_level_selected)
+        self._level_seg.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(lvl_row, text="Gælder kun dette møde", font=ctk.CTkFont(size=11),
+                     text_color=_CLR["text_secondary"]).pack(side="left", padx=(12, 0))
+        self._sync_level_seg()
+
+        self._highlight_type(None if self._adhoc_active else self.app._type_key)
 
     def _select_type(self, key):
+        self._adhoc_active = False
         self.app._type_key = key
         self.app.type_var.set(self.app._meeting_types[key]["navn"])
-        self.app._on_type_selected(self.app._meeting_types[key]["navn"])
+        self.app._on_type_selected(self.app._meeting_types[key]["navn"])  # nulstiller også overstyring
         self._highlight_type(key)
+        self._sync_level_seg()
 
     def _highlight_type(self, key):
         for k, c in self._type_cards.items():
             if c.winfo_exists():
                 c.configure(border_color=_CLR["accent"] if k == key else _CLR["card_border"])
                 self._draw_check(self._type_checks[k], k == key)
+        if self._adhoc_card.winfo_exists():
+            on = key is None and self._adhoc_active
+            self._adhoc_card.configure(border_color=_CLR["accent"] if on else _CLR["card_border"])
+            self._draw_check(self._adhoc_check, on)
+
+    def _select_adhoc(self):
+        """Markér ad-hoc kortet (kaldes ved klik/fokus/tastetryk i feltet)."""
+        if not self._adhoc_active:
+            self.app.referat_level_override = None  # frisk valg → følg typen
+        self._adhoc_active = True
+        self._highlight_type(None)
+        self._sync_level_seg()
+
+    def _commit_adhoc_type(self):
+        """Opret/genbrug ad-hoc typen hvis feltet er aktivt og udfyldt.
+        Tomt felt → behold den senest markerede eksisterende type (spec §6)."""
+        navn = self._adhoc_var.get().strip()
+        if not (self._adhoc_active and navn):
+            return
+        override = self.app.referat_level_override   # bevar pr.-møde-valget
+        key = self.app._save_adhoc_type(navn)
+        self._adhoc_active = False
+        self._adhoc_var.set("")
+        self._type_keys = list(self.app._meeting_types)
+        self.app._type_key = key
+        self.app.type_var.set(self.app._meeting_types[key]["navn"])
+        self.app._on_type_selected(self.app._meeting_types[key]["navn"])
+        self.app.referat_level_override = override
+
+    # — Referatniveau (pr. møde) ---------------------------------------
+    def _current_level(self) -> str:
+        """Niveauet vælgeren skal vise: aktiv overstyring, ellers typens eget
+        (ad-hoc typer oprettes som 'balanceret')."""
+        if self.app.referat_level_override is not None:
+            return self.app.referat_level_override
+        if self._adhoc_active:
+            return "balanceret"
+        return self.app._meeting_types[self.app._type_key]["detaljeniveau"]
+
+    def _sync_level_seg(self):
+        if self._level_seg.winfo_exists():
+            self._level_seg.set(_NIVEAU_LABELS[self._current_level()])
+
+    def _on_level_selected(self, label: str):
+        """Afviger valget fra typens eget niveau, sættes en pr.-møde-
+        overstyring; ellers ryddes den (None = følg typen)."""
+        niveau = _NIVEAU_KEYS[label]
+        base = ("balanceret" if self._adhoc_active
+                else self.app._meeting_types[self.app._type_key]["detaljeniveau"])
+        self.app.referat_level_override = None if niveau == base else niveau
 
     # — Trin 3: Navn & deltagere --------------------------------------
     def _build_navn(self):
