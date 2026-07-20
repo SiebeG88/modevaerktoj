@@ -1684,6 +1684,8 @@ class MeetingApp:
                 transcript=transcript,
                 minutes=minutes,
                 name_base=name,
+                meeting_type=meeting_type,
+                attendees=attendees,
             )
 
             self._ui_queue_put(("done", str(output_dir), name))

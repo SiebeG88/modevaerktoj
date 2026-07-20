@@ -31,17 +31,6 @@ def gemini_env(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key-for-tests")
 
 
-@pytest.fixture(autouse=True)
-def no_real_pandoc(request, mocker):
-    """Stub write_pdf_from_markdown så save_output ikke shell'er rigtig pandoc.
-
-    test_pdf tester funktionen direkte (med mock_subprocess) og skal bruge den
-    rigtige implementering, så der springes den over."""
-    if "test_pdf" in request.module.__name__:
-        return None
-    return mocker.patch("meeting_tool.write_pdf_from_markdown", return_value=None)
-
-
 # ----- WAV-fil -----
 
 @pytest.fixture

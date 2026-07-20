@@ -39,6 +39,7 @@ from datetime import datetime
 
 import audio_routing
 import app_paths
+import docx_export
 from transcript_merge import build_transcript
 
 
@@ -2107,101 +2108,40 @@ def generate_minutes(
 # 5. Output
 # ---------------------------------------------------------------------------
 
-# Steder weasyprint typisk ligger uden at være på GUI'ens begrænsede PATH.
-_WEASYPRINT_FALLBACK_DIRS = [
-    "/opt/local/bin",
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-]
-
-
-def _find_weasyprint() -> str | None:
-    """Find weasyprint-eksekverbar — også når den ikke er på PATH.
-
-    GUI'en startes med begrænset PATH hvor pip's user-bin
-    (~/Library/Python/X.Y/bin) ikke er med, så pandoc kan ikke selv
-    finde weasyprint dér.
-    """
-    found = shutil.which("weasyprint")
-    if found:
-        return found
-    candidates = [Path(sys.executable).parent / "weasyprint"]
-    user_python = Path.home() / "Library" / "Python"
-    if user_python.is_dir():
-        candidates += sorted(user_python.glob("*/bin/weasyprint"), reverse=True)
-    candidates += [Path(d) / "weasyprint" for d in _WEASYPRINT_FALLBACK_DIRS]
-    for c in candidates:
-        if c.is_file() and os.access(c, os.X_OK):
-            return str(c)
-    return None
-
-
-def write_pdf_from_markdown(md_path: Path, pdf_path: Path) -> Path | None:
-    """Render en markdown-fil til PDF via pandoc + weasyprint.
-
-    Best-effort: returnerer pdf_path ved succes, None hvis pandoc mangler
-    eller renderingen fejler (logger en advarsel, kaster ikke).
-    """
-    engine = _find_weasyprint()
-    env = None
-    if engine:
-        env = dict(os.environ)
-        env["PATH"] = f"{Path(engine).parent}{os.pathsep}{env.get('PATH', '')}"
-    try:
-        subprocess.run(
-            [
-                "pandoc", str(md_path), "-o", str(pdf_path),
-                f"--pdf-engine={engine or 'weasyprint'}",
-            ],
-            check=True,
-            capture_output=True,
-            env=env,
-            creationflags=_NO_WINDOW,
-        )
-        return pdf_path
-    except FileNotFoundError:
-        print(
-            "Advarsel: pandoc ikke fundet - springer PDF over. "
-            "Installer med 'port install pandoc'.",
-            file=sys.stderr,
-        )
-        return None
-    except subprocess.CalledProcessError as e:
-        stderr = (e.stderr or b"")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        print(f"Advarsel: PDF-generering fejlede: {stderr}", file=sys.stderr)
-        return None
-
-
 def save_output(
     output_dir: Path,
     date: str,
     transcript: str,
     minutes: str | None,
     name_base: str | None = None,
+    meeting_type: dict | None = None,
+    attendees: list[str] | None = None,
 ):
-    """Gemmer transkription og referat som separate filer."""
+    """Gemmer transkription og (evt.) referat som Word-dokumenter med
+    metadata-hoved. Fejler .docx-skrivning, falder vi tilbage til .md så
+    intet indhold går tabt."""
     output_dir.mkdir(parents=True, exist_ok=True)
     base = name_base or date
+    mt_name = meeting_type.get("navn") if isinstance(meeting_type, dict) else None
+    att = attendees or []
 
-    transcript_file = output_dir / f"Transkription {base}.md"
-    transcript_file.write_text(
-        f"# Transkription - {base}\n\nDato: {date}\n\n{transcript}\n",
-        encoding="utf-8",
-    )
-    print(f"Transkription gemt: {transcript_file}", flush=True)
+    def _write(kind_title: str, filename_stem: str, body: str, is_transcript: bool):
+        try:
+            path = docx_export.write_meeting_docx(
+                output_dir / f"{filename_stem}.docx",
+                title=f"{kind_title} – {base}", date=date,
+                meeting_type_name=mt_name, attendees=att,
+                body=body, is_transcript=is_transcript)
+            print(f"{kind_title} gemt: {path}", flush=True)
+        except Exception as e:  # nød-fallback: bevar indholdet som .md
+            md = output_dir / f"{filename_stem}.md"
+            md.write_text(f"# {kind_title} - {base}\n\nDato: {date}\n\n{body}\n",
+                          encoding="utf-8")
+            print(f"Advarsel: Word-eksport fejlede ({e}); gemte {md}", file=sys.stderr)
 
+    _write("Transkription", f"Transkription {base}", transcript, True)
     if minutes:
-        minutes_file = output_dir / f"Referat {base}.md"
-        minutes_file.write_text(f"{minutes}\n", encoding="utf-8")
-        print(f"Referat gemt: {minutes_file}", flush=True)
-
-        pdf_file = write_pdf_from_markdown(
-            minutes_file, output_dir / f"Referat {base}.pdf"
-        )
-        if pdf_file:
-            print(f"Referat-PDF gemt: {pdf_file}", flush=True)
+        _write("Referat", f"Referat {base}", minutes, False)
 
 
 # ---------------------------------------------------------------------------
@@ -2261,6 +2201,8 @@ def transcribe_file(
         transcript=transcript,
         minutes=minutes,
         name_base=name_base,
+        meeting_type=meeting_type,
+        attendees=attendees,
     )
 
     return wav_path, transcript, minutes
