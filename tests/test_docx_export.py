@@ -65,6 +65,17 @@ def test_bold_becomes_bold_run(tmp_path):
     assert "vigtigt" in bold_runs
 
 
+def test_heading_inline_formatting_stripped(tmp_path):
+    out = docx_export.write_meeting_docx(
+        tmp_path / "r.docx", title="M", date="d",
+        meeting_type_name=None, attendees=[],
+        body="## **Vigtige beslutninger**", is_transcript=False)
+    doc = docx.Document(str(out))
+    h = next(p for p in doc.paragraphs if p.style.name == "Heading 2")
+    assert h.text == "Vigtige beslutninger"          # ingen asterisker
+    assert any(r.bold for r in h.runs)                 # og fed bevaret
+
+
 def test_transcript_keeps_speaker_lines_as_paragraphs(tmp_path):
     body = "Ole: Hej alle\nJacob: Godmorgen\n"
     out = docx_export.write_meeting_docx(

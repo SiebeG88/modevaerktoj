@@ -40,7 +40,7 @@ def _render_markdown(doc, body: str) -> None:
             continue
         m = _HEADING_RE.match(line)
         if m:
-            doc.add_heading(m.group(2), level=len(m.group(1)))
+            _add_inline(doc.add_heading("", level=len(m.group(1))), m.group(2))
             continue
         m = _BULLET_RE.match(line)
         if m:
