@@ -2416,12 +2416,19 @@ class MeetingTypesTab:
         self._load_into_form(self.current_key)
 
     def _load_into_form(self, key: str | None):
-        if key is None:  # ingen mødetyper — vis tomt formular
+        if key is None:  # ingen mødetyper — vis tomt formular med standardvalg
             self.navn_var.set("")
             self.fokus_var.set("")
             self.deltagere_var.set("")
             self.ekstra_box.delete("1.0", "end")
+            # Nulstil ALLE felter (også segmented/checkbokse) til defaults, så
+            # de ikke står med en tidligere types værdier.
+            self.detalje.set("balanceret")
+            self.citater_var.set(False)
+            self.opgave_var.set(True)
             self._refresh_selector()
+            self._set_status(
+                "Ingen mødetyper endnu — udfyld felterne og tryk Gem for at oprette en.")
             return
         t = self.types[key]
         self.navn_var.set(t["navn"])
@@ -2466,16 +2473,30 @@ class MeetingTypesTab:
         self._load_into_form(self.current_key)  # kalder også _refresh_selector
 
     def _save(self):
+        # Kræv et navn: tomt navn i tom-tilstand ville ellers oprette en
+        # navnløs type (_normalize giver "Møde", men det er sjældent hensigten).
+        if not self.navn_var.get().strip():
+            self._set_status("Giv typen et navn.")
+            return
         new_type = self._form_to_type()
         new_navn = new_type["navn"]
+        # Fra tom-tilstand (ingen valgt type) → generér en ny nøgle i stedet for
+        # at skrive self.types[None] (som json.dumps ville serialisere til "null").
+        key = self.current_key
+        if key is None:  # gemt fra tom-tilstand → opret ny nøgle
+            i = 1
+            while f"type{i}" in self.types:
+                i += 1
+            key = f"type{i}"
+            self.current_key = key
         # Advar ved duplikat navn (anden nøgle med samme navn)
         for k, t in self.types.items():
-            if k != self.current_key and t["navn"] == new_navn:
+            if k != key and t["navn"] == new_navn:
                 self._set_status(
                     f"Advarsel: Typen '{new_navn}' findes allerede. Omdøb for at undgå forveksling."
                 )
                 return
-        self.types[self.current_key] = new_type
+        self.types[key] = new_type
         self._persist()
         self._refresh_selector()
         self._notify_change()
