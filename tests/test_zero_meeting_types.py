@@ -67,3 +67,23 @@ def test_cleanup_preserves_extra_type(tmp_path):
     meeting_tool.cleanup_seed_meeting_types(tmp_path)
     data = json.loads((tmp_path / "meeting_types.json").read_text(encoding="utf-8"))
     assert "egen" in data
+
+
+from types import MethodType, SimpleNamespace
+
+
+def test_file_tab_resolve_uses_neutral_when_no_type(tmp_path, monkeypatch):
+    import meeting_app
+    monkeypatch.setattr(
+        meeting_app.MeetingTypesTab, "TYPES_FILE", tmp_path / "meeting_types.json")
+    tab = SimpleNamespace(
+        _meeting_types={}, _type_keys=[], _type_key=None,
+        type_var=SimpleNamespace(get=lambda: "", set=lambda v: None),
+        _level_seg=SimpleNamespace(get=lambda: "Mellem"),
+        _on_types_changed=lambda: None,
+        status_var=SimpleNamespace(set=lambda s: None),
+    )
+    tab._resolve_meeting_type = MethodType(
+        meeting_app.TranscribeFileTab._resolve_meeting_type, tab)
+    mt = tab._resolve_meeting_type()
+    assert mt["navn"] == "Møde"  # neutral default

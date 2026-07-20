@@ -2368,10 +2368,13 @@ def main():
         )
         args.live = False
 
-    # Mødetype: resolve med fallback
+    # Mødetype: resolve med fallback. Nul mødetyper er en gyldig tilstand —
+    # next(iter(...)) ville da rejse StopIteration, så vi falder tilbage til
+    # den neutrale standardtype i stedet for at ramme et tomt dict.
     _types = load_meeting_types(CONFIG_DIR)
     _meeting_type = (
-        _types.get(args.meeting_type) or _types.get("driftledelse") or next(iter(_types.values()))
+        _types.get(args.meeting_type) or _types.get("driftledelse")
+        or (next(iter(_types.values())) if _types else neutral_meeting_type())
     )
 
     # Dato

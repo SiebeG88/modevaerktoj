@@ -495,7 +495,7 @@ class MeetingApp:
         _state = load_state()
         self._type_key = _state.get("meeting_type")
         if self._type_key not in self._meeting_types:
-            self._type_key = next(iter(self._meeting_types))
+            self._type_key = next(iter(self._meeting_types), None)  # None = ingen typer
         self._type_keys = list(self._meeting_types)
 
         # Referatniveau-overstyring for det NÆSTE møde (None = følg typen).
@@ -532,7 +532,11 @@ class MeetingApp:
         self.system_audio_var = ctk.BooleanVar(value=False)
         self.engine_var = ctk.StringVar(value=DEFAULT_ENGINE)
         self.minutes_var = ctk.BooleanVar(value=True)
-        self.type_var = ctk.StringVar(value=self._meeting_types[self._type_key]["navn"])
+        # Ingen valgt type (nul mødetyper) → vis neutral standardnavn.
+        self.type_var = ctk.StringVar(value=(
+            self._meeting_types[self._type_key]["navn"] if self._type_key
+            else meeting_tool.neutral_meeting_type()["navn"]
+        ))
         # Mødeform styrer systemlyd-default: fysisk = kun mik, online/telefon = + modpart
         self.meeting_form_var = ctk.StringVar(value="fysisk")
         self._engine_buttons = {}
@@ -1262,15 +1266,18 @@ class MeetingApp:
     # Mødetype
     # ------------------------------------------------------------------
 
-    def _key_for_label(self, label: str) -> str:
+    def _key_for_label(self, label: str) -> str | None:
         for k in self._type_keys:
             if self._meeting_types[k]["navn"] == label:
                 return k
-        return self._type_keys[0]
+        return self._type_keys[0] if self._type_keys else None
 
     def _on_type_selected(self, label: str):
         self.referat_level_override = None  # nyt typevalg → følg typens niveau
         self._type_key = self._key_for_label(label)
+        if self._type_key is None:  # ingen mødetyper — intet at slå op
+            self.name_var.set("")
+            return
         mtype = self._meeting_types[self._type_key]
         self.name_var.set(f"{mtype['navn']} {self.date_var.get()}")
         state = load_state()
@@ -1291,8 +1298,11 @@ class MeetingApp:
         self._meeting_types = meeting_tool.load_meeting_types(CONFIG_DIR)
         self._type_keys = list(self._meeting_types)
         if self._type_key not in self._meeting_types:
-            self._type_key = self._type_keys[0]
-        self.type_var.set(self._meeting_types[self._type_key]["navn"])
+            self._type_key = self._type_keys[0] if self._type_keys else None
+        self.type_var.set(
+            self._meeting_types[self._type_key]["navn"] if self._type_key
+            else meeting_tool.neutral_meeting_type()["navn"]
+        )
 
     def _save_adhoc_type(self, navn: str) -> str:
         """Opret (eller genbrug) en mødetype ud fra et ad-hoc navn fra guiden.
@@ -1535,9 +1545,10 @@ class MeetingApp:
         engine = self.engine_var.get()
         system_audio = self.system_audio_var.get()
         # Pr.-møde-overstyring af referatniveau: kopi af typen, original røres ikke
-        meeting_type = override_detaljeniveau(
-            self._meeting_types[self._type_key], self.referat_level_override
-        )
+        # Ingen valgt type (nul mødetyper) → brug neutral standardtype.
+        base_type = (self._meeting_types.get(self._type_key)
+                     if self._type_key else None) or meeting_tool.neutral_meeting_type()
+        meeting_type = override_detaljeniveau(base_type, self.referat_level_override)
 
         self._log(f"Motor: {engine}")
         self._log("")
@@ -2148,7 +2159,7 @@ class MeetingTypesTab:
         # Kaldes efter hver gem/opret/slet, så andre faners dropdowns opdateres.
         self._on_change = on_change
         self.types = meeting_tool.load_meeting_types(CONFIG_DIR)
-        self.current_key = next(iter(self.types))
+        self.current_key = next(iter(self.types), None)  # None = ingen typer
         self._build_ui()
         self._load_into_form(self.current_key)
 
@@ -2197,7 +2208,9 @@ class MeetingTypesTab:
 
         # -- Type-vælger
         MeetingApp._field_label(inner, "Vælg mødetype")
-        self.selector_var = ctk.StringVar(value=self.types[self.current_key]["navn"])
+        self.selector_var = ctk.StringVar(
+            value=self.types[self.current_key]["navn"] if self.current_key else ""
+        )
         self.selector = ctk.CTkComboBox(
             inner,
             variable=self.selector_var,
@@ -2383,11 +2396,16 @@ class MeetingTypesTab:
     def _refresh_selector(self):
         """Opdatér type-dropdown og Slet-knap-state."""
         names = [t["navn"] for t in self.types.values()]
-        self.selector.configure(values=names)
-        self.selector_var.set(self.types[self.current_key]["navn"])
-        # Slet spærret når kun én type tilbage
+        if names:
+            self.selector.configure(values=names)
+            self.selector_var.set(self.types[self.current_key]["navn"])
+        else:
+            # Tom-tilstand: ingen mødetyper tilbage — ryd vælgeren.
+            self.selector.configure(values=[])
+            self.selector_var.set("")
+        # Sletning tillades ned til nul; kun spærret når intet er valgt.
         self.delete_btn.configure(
-            state=("disabled" if len(self.types) <= 1 else "normal")
+            state=("disabled" if self.current_key is None else "normal")
         )
 
     def _on_select(self, label: str):
@@ -2397,7 +2415,14 @@ class MeetingTypesTab:
                 break
         self._load_into_form(self.current_key)
 
-    def _load_into_form(self, key: str):
+    def _load_into_form(self, key: str | None):
+        if key is None:  # ingen mødetyper — vis tomt formular
+            self.navn_var.set("")
+            self.fokus_var.set("")
+            self.deltagere_var.set("")
+            self.ekstra_box.delete("1.0", "end")
+            self._refresh_selector()
+            return
         t = self.types[key]
         self.navn_var.set(t["navn"])
         self.detalje.set(t["detaljeniveau"])
@@ -2437,7 +2462,7 @@ class MeetingTypesTab:
         Bevarer markeringen hvis nøglen stadig findes."""
         self.types = meeting_tool.load_meeting_types(CONFIG_DIR)
         if self.current_key not in self.types:
-            self.current_key = next(iter(self.types))
+            self.current_key = next(iter(self.types), None)
         self._load_into_form(self.current_key)  # kalder også _refresh_selector
 
     def _save(self):
@@ -2469,10 +2494,10 @@ class MeetingTypesTab:
         self._notify_change()
 
     def _delete(self):
-        if len(self.types) <= 1:
+        if self.current_key is None:  # intet valgt — intet at slette
             return
         del self.types[self.current_key]
-        self.current_key = next(iter(self.types))
+        self.current_key = next(iter(self.types), None)  # None hvis nu tomt
         self._load_into_form(self.current_key)
         self._persist()
         self._notify_change()
@@ -2513,7 +2538,7 @@ class TranscribeFileTab:
         _state = load_state()
         self._type_key = _state.get("meeting_type")
         if self._type_key not in self._meeting_types:
-            self._type_key = next(iter(self._meeting_types))
+            self._type_key = next(iter(self._meeting_types), None)  # None = ingen typer
         self._type_keys = list(self._meeting_types)
 
         self._build_ui()
@@ -2630,7 +2655,11 @@ class TranscribeFileTab:
         # -- Mødetype dropdown
         MeetingApp._field_label(inner, "Mødetype")
         _type_labels = [self._meeting_types[k]["navn"] for k in self._type_keys]
-        self.type_var = ctk.StringVar(value=self._meeting_types[self._type_key]["navn"])
+        # Ingen valgt type (nul mødetyper) → vis neutral standardnavn.
+        self.type_var = ctk.StringVar(value=(
+            self._meeting_types[self._type_key]["navn"] if self._type_key
+            else meeting_tool.neutral_meeting_type()["navn"]
+        ))
         self.type_combo = ctk.CTkComboBox(
             inner,
             variable=self.type_var,
@@ -2881,18 +2910,20 @@ class TranscribeFileTab:
     # Mødetype
     # ------------------------------------------------------------------
 
-    def _key_for_label(self, label: str) -> str:
+    def _key_for_label(self, label: str) -> str | None:
         for k in self._type_keys:
             if self._meeting_types[k]["navn"] == label:
                 return k
-        return self._type_keys[0]
+        return self._type_keys[0] if self._type_keys else None
 
     def _sync_level_seg(self):
-        """Sæt niveau-vælgeren til den valgte types eget niveau."""
+        """Sæt niveau-vælgeren til den valgte types eget niveau (neutral hvis ingen)."""
         if self._level_seg.winfo_exists():
-            self._level_seg.set(
-                _NIVEAU_LABELS[self._meeting_types[self._type_key]["detaljeniveau"]]
+            niveau = (
+                self._meeting_types[self._type_key]["detaljeniveau"] if self._type_key
+                else meeting_tool.neutral_meeting_type()["detaljeniveau"]
             )
+            self._level_seg.set(_NIVEAU_LABELS[niveau])
 
     def _resolve_meeting_type(self) -> dict:
         """Effektiv mødetype for denne kørsel.
@@ -2906,7 +2937,11 @@ class TranscribeFileTab:
         # genindlæser fanen og nulstiller vælgeren til typens eget niveau.
         niveau = _NIVEAU_KEYS.get(self._level_seg.get())
         navn = self.type_var.get().strip()
-        if navn and navn != self._meeting_types[self._type_key]["navn"]:
+        # Ingen valgt type (nul mødetyper) → aktuelt navn er tomt, ethvert indtastet
+        # navn opretter da en ny ad-hoc type.
+        aktuelt_navn = (self._meeting_types.get(self._type_key, {}).get("navn")
+                        if self._type_key else None)
+        if navn and navn != aktuelt_navn:
             types, key, created = ensure_meeting_type(self._meeting_types, navn)
             if created:
                 fejl = persist_meeting_types(types, MeetingTypesTab.TYPES_FILE)
@@ -2921,11 +2956,16 @@ class TranscribeFileTab:
             else:
                 self._type_key = key
             self.type_var.set(self._meeting_types[self._type_key]["navn"])
-        mtype = self._meeting_types[self._type_key]
+        # Stadig ingen type (intet indtastet, ingen typer i forvejen) → neutral standard.
+        mtype = (self._meeting_types.get(self._type_key)
+                 if self._type_key else None) or meeting_tool.neutral_meeting_type()
         return override_detaljeniveau(mtype, niveau)
 
     def _on_type_selected(self, label: str):
         self._type_key = self._key_for_label(label)
+        if self._type_key is None:  # ingen mødetyper — intet at slå op
+            self.name_var.set("")
+            return
         mtype = self._meeting_types[self._type_key]
         self.name_var.set(f"{mtype['navn']} {self.date_var.get()}")
         state = load_state()
@@ -2947,10 +2987,13 @@ class TranscribeFileTab:
         self._meeting_types = meeting_tool.load_meeting_types(CONFIG_DIR)
         self._type_keys = list(self._meeting_types)
         if self._type_key not in self._meeting_types:
-            self._type_key = self._type_keys[0]
+            self._type_key = self._type_keys[0] if self._type_keys else None
         labels = [self._meeting_types[k]["navn"] for k in self._type_keys]
         self.type_combo.configure(values=labels)
-        self.type_var.set(self._meeting_types[self._type_key]["navn"])
+        self.type_var.set(
+            self._meeting_types[self._type_key]["navn"] if self._type_key
+            else meeting_tool.neutral_meeting_type()["navn"]
+        )
         self._sync_level_seg()
 
     def _load_defaults(self):
@@ -3540,7 +3583,10 @@ class MeetingWizard(ctk.CTkToplevel):
             return self.app.referat_level_override
         if self._adhoc_active:
             return "balanceret"
-        return self.app._meeting_types[self.app._type_key]["detaljeniveau"]
+        key = self.app._type_key
+        if key and key in self.app._meeting_types:
+            return self.app._meeting_types[key]["detaljeniveau"]
+        return "balanceret"  # ingen mødetyper — neutral standard
 
     def _sync_level_seg(self):
         if self._level_seg.winfo_exists():
@@ -3550,8 +3596,11 @@ class MeetingWizard(ctk.CTkToplevel):
         """Afviger valget fra typens eget niveau, sættes en pr.-møde-
         overstyring; ellers ryddes den (None = følg typen)."""
         niveau = _NIVEAU_KEYS[label]
-        base = ("balanceret" if self._adhoc_active
-                else self.app._meeting_types[self.app._type_key]["detaljeniveau"])
+        key = self.app._type_key
+        if self._adhoc_active or not (key and key in self.app._meeting_types):
+            base = "balanceret"  # ad-hoc eller ingen mødetyper — neutral standard
+        else:
+            base = self.app._meeting_types[key]["detaljeniveau"]
         self.app.referat_level_override = None if niveau == base else niveau
 
     # — Trin 3: Navn & deltagere --------------------------------------
@@ -4062,6 +4111,9 @@ def _maybe_apply_update(root, app, staging) -> None:
 
 def main():
     meeting_tool.seed_user_config()
+    # Engangs-oprydning: fjern urørte danske seed-mødetyper, så nul mødetyper
+    # er en gyldig starttilstand (jf. meeting_tool.cleanup_seed_meeting_types).
+    meeting_tool.cleanup_seed_meeting_types(CONFIG_DIR)
 
     # CustomTkinter global appearance
     ctk.set_appearance_mode("system")    # follows macOS dark/light
