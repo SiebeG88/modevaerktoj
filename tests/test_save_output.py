@@ -33,6 +33,19 @@ def test_no_minutes_writes_only_transcript(tmp_path):
     assert not (tmp_path / "Referat M.docx").exists()
 
 
+def test_name_base_defaults_to_date(tmp_path):
+    meeting_tool.save_output(
+        output_dir=tmp_path, date="20-07-2026", transcript="x", minutes=None)
+    assert (tmp_path / "Transkription 20-07-2026.docx").exists()
+
+
+def test_creates_output_dir_if_missing(tmp_path):
+    out = tmp_path / "ny" / "undermappe"
+    meeting_tool.save_output(
+        output_dir=out, date="d", transcript="x", minutes=None, name_base="M")
+    assert (out / "Transkription M.docx").exists()
+
+
 def test_docx_failure_falls_back_to_md(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("docx nede")
