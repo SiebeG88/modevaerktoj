@@ -2212,7 +2212,7 @@ def transcribe_file(
 # 6. Main
 # ---------------------------------------------------------------------------
 
-DEFAULT_ATTENDEES = ["Mads", "Lars", "Dorte"]
+DEFAULT_ATTENDEES = []
 
 
 def main():

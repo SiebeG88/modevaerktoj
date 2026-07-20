@@ -38,7 +38,7 @@ sys.path.insert(0, str(TOOL_DIR))
 import meeting_tool  # noqa: E402
 import audio_routing  # noqa: E402
 
-DEFAULT_ATTENDEES = ["Mads", "Lars", "Dorte"]
+DEFAULT_ATTENDEES = []
 DEFAULT_MODEL = "syvai/faster-hviske-v3-conversation"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-pro"
 DEFAULT_ENGINE = "hviske"  # "hviske" (live, lokalt) eller "gemini" (efter, cloud)
@@ -1492,8 +1492,7 @@ class MeetingApp:
             a.strip() for a in raw_attendees.replace(";", ",").split(",")
             if a.strip()
         ]
-        if not attendees:
-            attendees = list(DEFAULT_ATTENDEES)
+        # Tomt felt bevares tomt; ingen genindsættelse af standardnavne.
 
         # Husk valg til naeste gang
         _saved = load_state()
@@ -3053,7 +3052,7 @@ class TranscribeFileTab:
             a.strip()
             for a in self.attendees_var.get().replace(";", ",").split(",")
             if a.strip()
-        ] or list(DEFAULT_ATTENDEES)
+        ]
         engine = self.engine_var.get()
         make_minutes = self.minutes_var.get()
         meeting_type = self._resolve_meeting_type()
