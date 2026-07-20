@@ -58,19 +58,20 @@ class TestLoadMeetingTypes:
         # filen blev skrevet
         assert (tmp_path / "meeting_types.json").exists()
 
-    def test_returns_builtin_fallback_when_no_files(self, tmp_path):
+    def test_returns_empty_when_no_files(self, tmp_path):
+        # Nul mødetyper er en gyldig tilstand (ingen indbygget fallback længere).
         types = mt.load_meeting_types(tmp_path)
-        assert "driftledelse" in types  # indbygget fallback
+        assert types == {}
 
     def test_corrupt_json_falls_back_without_crash(self, tmp_path):
         (tmp_path / "meeting_types.json").write_text("{ ikke json", encoding="utf-8")
         types = mt.load_meeting_types(tmp_path)
-        assert "driftledelse" in types
+        assert types == {}
 
-    def test_empty_dict_reseeds_to_at_least_one(self, tmp_path):
+    def test_empty_dict_stays_empty(self, tmp_path):
         self._write(tmp_path, "meeting_types.json", {})
         types = mt.load_meeting_types(tmp_path)
-        assert len(types) >= 1
+        assert types == {}
 
     def test_normalizes_each_type(self, tmp_path):
         self._write(tmp_path, "meeting_types.json",

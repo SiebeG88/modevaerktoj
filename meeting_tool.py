@@ -2058,15 +2058,13 @@ def generate_minutes(
 ) -> str:
     """Genererer referat og opgaver via Gemini API.
 
-    meeting_type: en (normaliseret) mødetype-dict. None → driftledelse-fallback.
+    meeting_type: en (normaliseret) mødetype-dict. None → neutral standardtype
+    (se neutral_meeting_type).
     """
     from google import genai
     from google.genai import types
 
-    if meeting_type is None:
-        _types = load_meeting_types(CONFIG_DIR)
-        meeting_type = _types.get("driftledelse") or next(iter(_types.values()))
-    meeting_type = _normalize_meeting_type(meeting_type)
+    meeting_type = _normalize_meeting_type(meeting_type or {})
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -2546,37 +2544,64 @@ def _normalize_meeting_type(raw: dict) -> dict:
     return out
 
 
-# Indbygget fallback hvis hverken meeting_types.json eller default-filen findes
-# eller kan læses. Sikrer at appen altid har mindst én brugbar type.
-# NB: Dette er BEVIDST et delmængde af meeting_types.default.json — en
-# last-resort-floor, ikke et spejl. Mismatch med default-filen er forventet.
-_BUILTIN_MEETING_TYPE = {
+def _normalize_meeting_types(raw: dict) -> dict:
+    """Normaliserer alle typer. Ikke-dict → {}; tom dict bevares tom
+    (nul mødetyper er en gyldig tilstand)."""
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): _normalize_meeting_type(v) for k, v in raw.items()}
+
+
+def neutral_meeting_type() -> dict:
+    """En gyldig, ikke-gemt standardtype til brug når ingen er valgt
+    (navn 'Møde', balanceret niveau). Vises ikke og persisteres ikke."""
+    return _normalize_meeting_type({})
+
+
+# De to oprindelige seed-typer, som gamle installationer stadig har liggende.
+# Bruges KUN til engangs-oprydning så de urørte danske eksempler kan fjernes.
+_SEED_MEETING_TYPES = {
     "driftledelse": {
-        "navn": "Driftledelsesmøde",
-        "detaljeniveau": "kortfattet",
-        "citater": False,
-        "opgaveliste": True,
+        "navn": "Driftledelsesmøde", "detaljeniveau": "kortfattet",
+        "citater": False, "opgaveliste": True,
         "fokus": "Konkrete opgaver, aftaler og beslutninger for den daglige drift.",
-        "ekstra_instruktioner": "",
+        "ekstra_instruktioner": "", "deltagere": [],
+    },
+    "ledergruppe": {
+        "navn": "Ledergruppemøde", "detaljeniveau": "grundig",
+        "citater": True, "opgaveliste": False,
+        "fokus": "Strategi, langsigtet retning og principielle drøftelser.",
+        "ekstra_instruktioner": "Skriv i sammenhængende prosa. Bevar nuancer og uenigheder.",
         "deltagere": [],
-    }
+    },
 }
 
 
-def _normalize_meeting_types(raw: dict) -> dict:
-    """Normaliserer alle typer i et dict. Ikke-dict eller tomt → builtin."""
-    if not isinstance(raw, dict) or not raw:
-        return {k: _normalize_meeting_type(v) for k, v in _BUILTIN_MEETING_TYPE.items()}
-    return {str(k): _normalize_meeting_type(v) for k, v in raw.items()}
+def cleanup_seed_meeting_types(tool_dir: Path) -> None:
+    """Engangs-oprydning: hvis meeting_types.json er PRÆCIS de to urørte
+    seed-typer, tømmes den ({}). Har brugeren redigeret/tilføjet noget, røres
+    filen ikke. Efter tømning er betingelsen aldrig sand igen."""
+    f = tool_dir / "meeting_types.json"
+    if not f.exists():
+        return
+    try:
+        raw = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if _normalize_meeting_types(raw) == _normalize_meeting_types(_SEED_MEETING_TYPES):
+        try:
+            f.write_text("{}", encoding="utf-8")
+        except OSError as e:
+            print(f"Kunne ikke rydde seed-mødetyper: {e}", file=sys.stderr)
 
 
 def load_meeting_types(tool_dir: Path) -> dict:
     """Indlæser meeting_types.json fra tool_dir.
 
-    Mangler filen → seedes fra meeting_types.default.json (hvis den findes),
-    ellers fra indbygget fallback. Ugyldig JSON/tom dict → fallback. Hver type
-    normaliseres så håndredigeret JSON aldrig brækker prompten. Returnerer altid
-    mindst én type.
+    Mangler filen → seedes fra meeting_types.default.json (hvis den findes og
+    har indhold), ellers oprettes en tom fil. Ugyldig JSON → {}. Hver type
+    normaliseres så håndredigeret JSON aldrig brækker prompten. Nul mødetyper
+    er en gyldig tilstand; kan derfor returnere {}.
     """
     types_file = tool_dir / "meeting_types.json"
     default_file = tool_dir / "meeting_types.default.json"
