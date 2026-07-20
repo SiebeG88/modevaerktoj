@@ -2130,12 +2130,13 @@ def save_output(
                 title=f"{kind_title} – {base}", date=date,
                 meeting_type_name=mt_name, attendees=att,
                 body=body, is_transcript=is_transcript)
-            print(f"{kind_title} gemt: {path}", flush=True)
         except Exception as e:  # nød-fallback: bevar indholdet som .md
             md = output_dir / f"{filename_stem}.md"
             md.write_text(f"# {kind_title} - {base}\n\nDato: {date}\n\n{body}\n",
                           encoding="utf-8")
             print(f"Advarsel: Word-eksport fejlede ({e}); gemte {md}", file=sys.stderr)
+            return
+        print(f"{kind_title} gemt: {path}", flush=True)
 
     _write("Transkription", f"Transkription {base}", transcript, True)
     if minutes:
@@ -2492,7 +2493,8 @@ def main():
             print("Transkriptionen gemmes stadig.")
 
     # --- Trin 4: Gem ---
-    save_output(output_dir, date, transcript, minutes)
+    save_output(output_dir, date, transcript, minutes,
+                meeting_type=_meeting_type, attendees=args.attendees)
 
     print(f"\nFaerdig!")
 
