@@ -9,9 +9,14 @@ block_cipher = None
 # m.v.) robust. collect_data_files alene tager IKKE Python-koden med. ---
 ctk_datas, ctk_binaries, ctk_hiddenimports = collect_all("customtkinter")
 
+# python-docx skibber en default-skabelon (docx/templates/default.docx) som
+# pakke-data — Document() fejler uden den, så collect_all bundler alt.
+docx_datas, docx_binaries, docx_hiddenimports = collect_all("docx")
+
 # --- Data-filer ---
 datas = []
 datas += ctk_datas
+datas += docx_datas
 # Read-only templates — app_paths.ensure_user_config seeder dem til %APPDATA%
 # ved første kørsel. De ligger i app-roden ved siden af exe'en.
 datas += [
@@ -28,6 +33,7 @@ binaries = [
     ("ffprobe.exe", "."),
 ]
 binaries += ctk_binaries
+binaries += docx_binaries
 
 a = Analysis(
     ["meeting_app.py"],
@@ -48,7 +54,8 @@ a = Analysis(
         "google.genai",
         "anthropic",
         "pydub",
-    ] + ctk_hiddenimports,
+        "docx",
+    ] + ctk_hiddenimports + docx_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
