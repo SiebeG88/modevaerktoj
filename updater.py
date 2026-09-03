@@ -114,6 +114,66 @@ def _ps_quote(value) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def _dir_writable(path) -> bool:
+    """True hvis processen kan skrive i mappen.
+
+    Afgør om OTA-swappet kræver administrator-elevation: under
+    C:\\Program Files kan en almindelig proces ikke skrive, mens den gamle
+    pr.-bruger-sti (%LOCALAPPDATA%\\Programs) altid er skrivbar."""
+    probe = Path(path) / ".ota-write-test"
+    try:
+        probe.write_bytes(b"")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def _build_helper_script(app_root, new_dir, exe_path, log_path, pid,
+                         elevated: bool) -> str:
+    """Byg PowerShell-swap-helperen som tekst.
+
+    elevated=True → helperen kører som administrator (Program Files), og appen
+    genstartes via explorer.exe så den IKKE arver administrator-rettigheder.
+    """
+    if elevated:
+        start_app = ("function StartApp { Start-Process -FilePath "
+                     "'explorer.exe' -ArgumentList ('\"' + $exe + '\"') }\n")
+    else:
+        start_app = "function StartApp { Start-Process -FilePath $exe }\n"
+    # $procId — IKKE $pid: $PID er en skrivebeskyttet auto-variabel i PowerShell.
+    return (
+        "$ErrorActionPreference='SilentlyContinue'\n"
+        f"$log={_ps_quote(log_path)}; $appRoot={_ps_quote(app_root)}; "
+        f"$newDir={_ps_quote(new_dir)}; $exe={_ps_quote(exe_path)}; $procId={pid}\n"
+        "$parent=Split-Path -Parent $appRoot; $leaf=Split-Path -Leaf $appRoot\n"
+        "$bak=Join-Path $parent ($leaf + '.ota-bak')\n"
+        "function L($m){ \"$(Get-Date -Format o) $m\" | Out-File -FilePath $log -Append -Encoding utf8 }\n"
+        + start_app +
+        "L \"OTA start; venter paa pid $procId\"\n"
+        "while (Get-Process -Id $procId -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 1 }\n"
+        "L 'proces afsluttet; bytter app-mappe'\n"
+        "if (Test-Path -LiteralPath $bak) { Remove-Item -LiteralPath $bak -Recurse -Force }\n"
+        "$moved=$false\n"
+        "for ($i=0; $i -lt 20; $i++) {\n"
+        "  try { Move-Item -LiteralPath $appRoot -Destination $bak -ErrorAction Stop; $moved=$true; break }\n"
+        "  catch { Start-Sleep -Seconds 1 }\n"
+        "}\n"
+        "if (-not $moved) { L 'FEJL: kunne ikke frigive app-mappe; genstarter uaendret'; StartApp; return }\n"
+        "Move-Item -LiteralPath $newDir -Destination $appRoot -Force\n"
+        "if (Test-Path -LiteralPath $exe) {\n"
+        "  L 'opdatering ok; genstarter'\n"
+        "  Remove-Item -LiteralPath $bak -Recurse -Force\n"
+        "  StartApp\n"
+        "} else {\n"
+        "  L 'FEJL: ny exe mangler; ruller tilbage'\n"
+        "  if (Test-Path -LiteralPath $appRoot) { Remove-Item -LiteralPath $appRoot -Recurse -Force }\n"
+        "  Move-Item -LiteralPath $bak -Destination $appRoot\n"
+        "  StartApp\n"
+        "}\n"
+    )
+
+
 def apply_and_restart(staging_dir) -> None:  # pragma: no cover
     """Pak staging-zip ud og swap app-mappen via en detached PowerShell-helper,
     der venter på at denne proces lukker (fil-låsen frigives), tager backup af
@@ -152,37 +212,29 @@ def apply_and_restart(staging_dir) -> None:  # pragma: no cover
     log_path = app_paths.user_config_dir() / "ota-update.log"  # overlever swap
     pid = os.getpid()
 
-    # $procId — IKKE $pid: $PID er en skrivebeskyttet auto-variabel i PowerShell.
-    ps_script = (
-        "$ErrorActionPreference='SilentlyContinue'\n"
-        f"$log={_ps_quote(log_path)}; $appRoot={_ps_quote(app_root)}; "
-        f"$newDir={_ps_quote(new_dir)}; $exe={_ps_quote(exe_path)}; $procId={pid}\n"
-        "$parent=Split-Path -Parent $appRoot; $leaf=Split-Path -Leaf $appRoot\n"
-        "$bak=Join-Path $parent ($leaf + '.ota-bak')\n"
-        "function L($m){ \"$(Get-Date -Format o) $m\" | Out-File -FilePath $log -Append -Encoding utf8 }\n"
-        "L \"OTA start; venter paa pid $procId\"\n"
-        "while (Get-Process -Id $procId -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 1 }\n"
-        "L 'proces afsluttet; bytter app-mappe'\n"
-        "if (Test-Path -LiteralPath $bak) { Remove-Item -LiteralPath $bak -Recurse -Force }\n"
-        "$moved=$false\n"
-        "for ($i=0; $i -lt 20; $i++) {\n"
-        "  try { Move-Item -LiteralPath $appRoot -Destination $bak -ErrorAction Stop; $moved=$true; break }\n"
-        "  catch { Start-Sleep -Seconds 1 }\n"
-        "}\n"
-        "if (-not $moved) { L 'FEJL: kunne ikke frigive app-mappe; genstarter uaendret'; Start-Process -FilePath $exe; return }\n"
-        "Move-Item -LiteralPath $newDir -Destination $appRoot -Force\n"
-        "if (Test-Path -LiteralPath $exe) {\n"
-        "  L 'opdatering ok; genstarter'\n"
-        "  Remove-Item -LiteralPath $bak -Recurse -Force\n"
-        "  Start-Process -FilePath $exe\n"
-        "} else {\n"
-        "  L 'FEJL: ny exe mangler; ruller tilbage'\n"
-        "  if (Test-Path -LiteralPath $appRoot) { Remove-Item -LiteralPath $appRoot -Recurse -Force }\n"
-        "  Move-Item -LiteralPath $bak -Destination $appRoot\n"
-        "  Start-Process -FilePath $exe\n"
-        "}\n"
+    # Program Files kan ikke skrives af en almindelig proces → swap-helperen
+    # skal køre eleveret (UAC-prompt). Den gamle pr.-bruger-sti forbliver på
+    # den ikke-eleverede vej, præcis som før.
+    elevated = not _dir_writable(app_root)
+    ps_script = _build_helper_script(
+        app_root, new_dir, exe_path, log_path, pid, elevated,
     )
     encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
+
+    if elevated:
+        # Ydre, ikke-eleveret launcher: udløser UAC for den egentlige helper.
+        # Afviser brugeren UAC-prompten, logges det og appen genstartes uændret.
+        outer = (
+            "$ErrorActionPreference='Stop'\n"
+            f"$log={_ps_quote(log_path)}; $exe={_ps_quote(exe_path)}\n"
+            "function L($m){ \"$(Get-Date -Format o) $m\" | Out-File -FilePath $log -Append -Encoding utf8 }\n"
+            "L 'OTA kraever administrator; beder om UAC-godkendelse'\n"
+            "try { Start-Process -FilePath 'powershell' -Verb RunAs -WindowStyle Hidden "
+            f"-ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand','{encoded}') }}\n"
+            "catch { L 'FEJL: administrator-godkendelse afvist; genstarter uaendret'; Start-Process -FilePath $exe }\n"
+        )
+        encoded = base64.b64encode(outer.encode("utf-16-le")).decode("ascii")
+
     subprocess.Popen(
         ["powershell", "-NoProfile", "-NonInteractive",
          "-WindowStyle", "Hidden", "-EncodedCommand", encoded],

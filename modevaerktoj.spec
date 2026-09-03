@@ -83,6 +83,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon="AppIcon.ico",     # exe-ikon (Windows Stifinder / proceslinje)
+    version="version_info.txt",  # firma/produkt-metadata → færre AV-falske-positiver
 )
 coll = COLLECT(
     exe,
