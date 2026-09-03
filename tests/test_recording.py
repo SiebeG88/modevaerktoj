@@ -321,3 +321,67 @@ class TestGeminiDualTrackUsesBuildTranscript:
         assert kwargs["sys_start"] == 1000.0
         assert kwargs["mic_dur"] == 300.0
         assert kwargs["sys_dur"] == 600.0
+
+
+class TestFfmpegErrorDetails:
+    """ffmpeg_error_details: hint + log-hale når en optagelse fejler."""
+
+    def _write_log(self, tmp_path, body: str) -> None:
+        (tmp_path / "ffmpeg-optagelse.log").write_text(
+            f"--- optagelse: x.wav | 2026-09-03 10:00:00 ---\n{body}\n",
+            encoding="utf-8",
+        )
+
+    def test_missing_log_still_gives_hint(self):
+        msg = mt.ffmpeg_error_details()
+        assert "mikrofon" in msg.lower()
+        assert "skrivebordsapps" in msg  # privatlivs-hintet
+
+    def test_device_not_found_maps_to_specific_hint(self, tmp_path):
+        self._write_log(
+            tmp_path,
+            'Could not find audio only device with name "Mikrofon (USB)"',
+        )
+        msg = mt.ffmpeg_error_details()
+        assert "blev ikke fundet" in msg
+        assert "Could not find audio only device" in msg
+
+    def test_generic_error_includes_tail_and_privacy_hint(self, tmp_path):
+        self._write_log(tmp_path, "audio=Mikrofon: I/O error")
+        msg = mt.ffmpeg_error_details()
+        assert "skrivebordsapps" in msg
+        assert "I/O error" in msg
+
+    def test_only_last_session_is_quoted(self, tmp_path):
+        (tmp_path / "ffmpeg-optagelse.log").write_text(
+            "--- optagelse: a.wav | 2026-09-01 09:00:00 ---\n"
+            "gammel fejl fra i går\n"
+            "--- optagelse: b.wav | 2026-09-03 10:00:00 ---\n"
+            "ny fejl fra i dag\n",
+            encoding="utf-8",
+        )
+        msg = mt.ffmpeg_error_details()
+        assert "ny fejl fra i dag" in msg
+        assert "gammel fejl" not in msg
+
+    def test_open_and_close_roundtrip_writes_header(self, tmp_path):
+        handle = mt.open_ffmpeg_log("optagelse: test.wav")
+        mt.close_ffmpeg_log(handle)
+        content = (tmp_path / "ffmpeg-optagelse.log").read_text(encoding="utf-8")
+        assert "optagelse: test.wav" in content
+
+    def test_zero_size_wav_error_contains_details(
+        self, mock_subprocess, fake_gemini_client, tmp_path, mocker
+    ):
+        """Fejlbeskeden fra gemini-flowet indeholder nu hint + log-sti."""
+        master_wav = tmp_path / "Driftledelsesmøde 22-05-2026.wav"
+        master_wav.write_bytes(b"")
+        mocker.patch("meeting_tool.transcribe_with_gemini",
+                     return_value="ikke kaldt")
+
+        with pytest.raises(RuntimeError) as exc:
+            mt.record_then_transcribe_gemini(
+                output_dir=tmp_path, date="22-05-2026", device_id=0,
+            )
+        assert "Optagelsen blev ikke gemt" in str(exc.value)
+        assert "mikrofon" in str(exc.value).lower()

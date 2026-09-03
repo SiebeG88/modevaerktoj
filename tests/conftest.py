@@ -9,12 +9,15 @@ Alle eksterne afhængigheder mockes her:
 from __future__ import annotations
 
 import struct
+import sys
 import wave
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 # ----- Auto-applied -----
@@ -29,6 +32,17 @@ def silent_sleep(mocker):
 def gemini_env(monkeypatch):
     """Sikr at GEMINI_API_KEY er sat for tests der instantierer klienten."""
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key-for-tests")
+
+
+@pytest.fixture(autouse=True)
+def isolated_ffmpeg_log(tmp_path, monkeypatch):
+    """Peg ffmpeg-stderr-loggen på tmp_path så tests aldrig skriver i
+    brugerens rigtige config-mappe."""
+    import meeting_tool
+    monkeypatch.setattr(
+        meeting_tool, "ffmpeg_log_path",
+        lambda: tmp_path / "ffmpeg-optagelse.log",
+    )
 
 
 # ----- WAV-fil -----

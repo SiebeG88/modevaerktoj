@@ -3,7 +3,7 @@
 ; PyInstaller one-folder bundle to %LOCALAPPDATA%\Programs\Mødeværktøj.
 
 #define MyAppName "Mødeværktøj"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.1.1"
 #define MyAppPublisher "TBO"
 #define MyAppExeName "Mødeværktøj.exe"
 #define MyAppURL "https://github.com/SiebeG88/modevaerktoj"

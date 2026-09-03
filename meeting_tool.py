@@ -193,6 +193,92 @@ def stop_keep_awake(handle) -> None:
             pass
 
 
+# ---------------------------------------------------------------------------
+# ffmpeg stderr-log: fanger den reelle årsag når en optagelse fejler.
+# Uden denne røg ffmpeg-fejl i DEVNULL, og brugeren så kun "Optagelsen blev
+# ikke gemt" uden nogen chance for at fejlsøge (fx mikrofon blokeret af
+# Windows' privatlivsindstillinger).
+# ---------------------------------------------------------------------------
+
+_FFMPEG_LOG_MAX_BYTES = 512 * 1024
+
+
+def ffmpeg_log_path() -> Path:
+    """Sti til ffmpeg-optagelsesloggen (i bruger-config, overlever OTA)."""
+    return CONFIG_DIR / "ffmpeg-optagelse.log"
+
+
+def open_ffmpeg_log(label: str):
+    """Åbn ffmpeg-loggen (append) og skriv en sessions-header.
+
+    Returnerer et filhandle til Popen(stderr=...), eller subprocess.DEVNULL
+    hvis loggen ikke kan åbnes — logning må aldrig blokere en optagelse.
+    Trunkeres når den vokser forbi _FFMPEG_LOG_MAX_BYTES.
+    """
+    try:
+        path = ffmpeg_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size > _FFMPEG_LOG_MAX_BYTES:
+            path.unlink()
+        f = open(path, "a", encoding="utf-8", errors="replace")
+        f.write(f"\n--- {label} | {datetime.now():%Y-%m-%d %H:%M:%S} ---\n")
+        f.flush()
+        return f
+    except Exception:
+        return subprocess.DEVNULL
+
+
+def close_ffmpeg_log(handle) -> None:
+    """Luk et handle fra open_ffmpeg_log. Tåler DEVNULL/None."""
+    if handle is None or handle == subprocess.DEVNULL:
+        return
+    try:
+        handle.close()
+    except Exception:  # pragma: no cover
+        pass
+
+
+def ffmpeg_error_details() -> str:
+    """De sidste ffmpeg-linjer fra den aktuelle log-session + et dansk hint.
+
+    Bruges når en optagelse endte uden lydfil, så fejldialogen viser den
+    reelle årsag i stedet for kun 'blev ikke gemt'.
+    """
+    try:
+        lines = ffmpeg_log_path().read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except Exception:
+        lines = []
+    tail: list[str] = []
+    for line in reversed(lines):
+        if line.startswith("--- "):
+            break
+        if line.strip():
+            tail.append(line.strip())
+    tail.reverse()
+    blob = "\n".join(tail[-8:])
+    low = blob.lower()
+
+    if "could not find audio only device" in low or "no such" in low:
+        hint = ("Mikrofonen blev ikke fundet — tjek at den er tilsluttet, "
+                "og vælg den igen i Optag-fanen.")
+    else:
+        hint = ("Mikrofonen kunne ikke optages fra. Tjek:\n"
+                "  1. Windows Indstillinger → Beskyttelse af personlige "
+                "oplysninger → Mikrofon → slå 'Giv skrivebordsapps adgang "
+                "til din mikrofon' TIL.\n"
+                "  2. At andre programmer (Teams/Zoom) ikke holder "
+                "mikrofonen.\n"
+                "  3. At den rigtige mikrofon er valgt i Optag-fanen.")
+
+    msg = hint
+    if blob:
+        msg += f"\n\nffmpeg sagde:\n{blob}"
+    msg += f"\n\nFuld log: {ffmpeg_log_path()}"
+    return msg
+
+
 def default_meetings_dir() -> Path:
     """Standard-mappe til møde-output pr. platform.
 
@@ -445,8 +531,9 @@ def record_meeting(output_path: Path, device_id: int | str = 1) -> Path:
     ]
 
     # stdin=PIPE: send 'q' for paent stop (SIGTERM ignoreres af avfoundation)
+    log_f = open_ffmpeg_log(f"optagelse (CLI): {output_path.name}")
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=log_f,
                             creationflags=_NO_WINDOW)
 
     def stop_recording(signum, frame):  # pragma: no cover
@@ -464,6 +551,7 @@ def record_meeting(output_path: Path, device_id: int | str = 1) -> Path:
         proc.wait()
     finally:
         signal.signal(signal.SIGINT, original_handler)
+        close_ffmpeg_log(log_f)
 
     if output_path.exists() and output_path.stat().st_size > 0:
         size_mb = output_path.stat().st_size / (1024 * 1024)
@@ -471,6 +559,7 @@ def record_meeting(output_path: Path, device_id: int | str = 1) -> Path:
         return output_path
     else:
         print("Fejl: Optagelsen blev ikke gemt.")
+        print(ffmpeg_error_details())
         sys.exit(1)
 
 
@@ -974,8 +1063,9 @@ def record_and_transcribe_live(
     # SIGTERM/SIGINT ignoreres ofte af avfoundation-input paa macOS,
     # hvilket laser hele optagelsen. 'q' til stdin er ffmpegs kanoniske
     # quit-signal og flusher den igangvaerende segment-fil korrekt.
+    log_f = open_ffmpeg_log(f"live-optagelse: {chunks_dir}")
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=log_f,
                             creationflags=_NO_WINDOW)
 
     def graceful_stop():
@@ -1041,6 +1131,7 @@ def record_and_transcribe_live(
     finally:
         if original_handler is not None:
             signal.signal(signal.SIGINT, original_handler)
+        close_ffmpeg_log(log_f)
 
     # --- ffmpeg faerdig: stop watcher, indsend resterende chunks ---
     stop_watcher.set()
@@ -1052,7 +1143,9 @@ def record_and_transcribe_live(
         transcribe_queue.put(None)
         worker.join(timeout=5)
         stop_keep_awake(_awake)
-        raise RuntimeError("Ingen chunks blev optaget")
+        raise RuntimeError(
+            "Ingen chunks blev optaget.\n\n" + ffmpeg_error_details()
+        )
 
     for f in final_files:
         try:
@@ -1203,8 +1296,9 @@ def record_then_transcribe_gemini(
         str(master_path),
         "-y", "-loglevel", "warning",
     ]
+    log_f = open_ffmpeg_log(f"optagelse: {master_path.name}")
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=log_f,
                             creationflags=_NO_WINDOW)
 
     def graceful_stop():
@@ -1251,10 +1345,11 @@ def record_then_transcribe_gemini(
     finally:
         if original_handler is not None:
             signal.signal(signal.SIGINT, original_handler)
+        close_ffmpeg_log(log_f)
 
     if not master_path.exists() or master_path.stat().st_size == 0:
         stop_keep_awake(_awake)
-        raise RuntimeError("Optagelsen blev ikke gemt.")
+        raise RuntimeError("Optagelsen blev ikke gemt.\n\n" + ffmpeg_error_details())
 
     size_mb = master_path.stat().st_size / (1024 * 1024)
     _status(f"Optagelse færdig: {master_path.name} ({size_mb:.1f} MB)")
