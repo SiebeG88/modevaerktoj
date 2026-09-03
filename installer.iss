@@ -1,9 +1,11 @@
 ; Inno Setup script for Mødeværktøj
 ; Builds a single self-contained installer .exe that deploys the
-; PyInstaller one-folder bundle to %LOCALAPPDATA%\Programs\Mødeværktøj.
+; PyInstaller one-folder bundle to {autopf}\Mødeværktøj (Program Files).
+; Kræver administrator; migrerer automatisk fra den gamle pr.-bruger-
+; installation i %LOCALAPPDATA%\Programs\Mødeværktøj.
 
 #define MyAppName "Mødeværktøj"
-#define MyAppVersion "1.1.1"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "TBO"
 #define MyAppExeName "Mødeværktøj.exe"
 #define MyAppURL "https://github.com/SiebeG88/modevaerktoj"
@@ -16,11 +18,13 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={localappdata}\Programs\{#MyAppName}
+DefaultDirName={autopf}\{#MyAppName}
+; Altid Program Files — også ved opgradering fra den gamle pr.-bruger-sti.
+UsePreviousAppDir=no
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
-PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+PrivilegesRequired=admin
+CloseApplications=yes
 OutputDir=installer_out
 OutputBaseFilename=Modevaerktoj-Setup-{#MyAppVersion}
 Compression=lzma2/max
@@ -38,6 +42,18 @@ Name: "danish"; MessagesFile: "compiler:Languages\Danish.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce
+
+[InstallDelete]
+; Migration: fjern den gamle pr.-bruger-installation og dens genveje, så appen
+; ikke ligger to steder. (Bruger-config i %APPDATA%\Mødeværktøj røres ikke.)
+Type: filesandordirs; Name: "{localappdata}\Programs\{#MyAppName}"
+Type: files; Name: "{userdesktop}\{#MyAppName}.lnk"
+Type: filesandordirs; Name: "{userprograms}\{#MyAppName}"
+
+[Registry]
+; Fjern den gamle pr.-bruger-uninstall-post (HKCU), så appen ikke optræder
+; dobbelt under "Installerede apps".
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\{{B6E5E2C7-7E4F-4F2A-9B0D-2C3D4E5F6A7B}_is1"; ValueType: none; Flags: deletekey
 
 [Files]
 Source: "dist\Mødeværktøj\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

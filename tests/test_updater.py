@@ -123,3 +123,39 @@ def test_download_and_stage_raises_on_empty_checksum_file(tmp_path, mocker):
     with pytest.raises(updater.UpdateError):
         updater.download_and_stage(rel, tmp_path)
     assert not (tmp_path / "app.zip").exists()
+
+
+# ── Program Files-flytning: skrivbarheds-tjek + helper-script ───────────────
+
+def test_dir_writable_true(tmp_path):
+    assert updater._dir_writable(tmp_path) is True
+
+
+def test_dir_writable_false_for_missing_dir(tmp_path):
+    assert updater._dir_writable(tmp_path / "findes-ikke") is False
+
+
+def test_helper_script_elevated_restarts_via_explorer(tmp_path):
+    """Eleveret swap må ikke genstarte appen med admin-rettigheder."""
+    s = updater._build_helper_script(
+        tmp_path / "app", tmp_path / "new", tmp_path / "app" / "x.exe",
+        tmp_path / "ota.log", 123, elevated=True)
+    assert "explorer.exe" in s
+    assert "StartApp" in s
+
+
+def test_helper_script_unelevated_starts_exe_directly(tmp_path):
+    s = updater._build_helper_script(
+        tmp_path / "app", tmp_path / "new", tmp_path / "app" / "x.exe",
+        tmp_path / "ota.log", 123, elevated=False)
+    assert "explorer.exe" not in s
+    assert "Start-Process -FilePath $exe" in s
+
+
+def test_helper_script_quotes_paths_and_pid(tmp_path):
+    app = tmp_path / "Mødeværktøj"
+    s = updater._build_helper_script(
+        app, tmp_path / "new", app / "Mødeværktøj.exe",
+        tmp_path / "ota.log", 4321, elevated=False)
+    assert "$procId=4321" in s
+    assert str(app) in s
