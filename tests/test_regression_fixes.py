@@ -7,9 +7,9 @@ Fix #2 — _record_dual_tracks stop_event-raekkefoelge:
     ikke afslutter sig selv efter ~12s (drain-timeout) uanset om brugeren
     har trykket Stop.
 
-Fix #3 — _gemini_transcribe_single thinking_budget:
+Fix #3 — _gemini_transcribe_single thinking_level:
     GenerateContentConfig skal sendes med thinking_config der har
-    thinking_budget=128, saa 2.5-pro ikke braender hele output-budgettet
+    thinking_level=LOW, saa modellen ikke braender hele output-budgettet
     paa thinking og returnerer tom tekst.
 """
 from __future__ import annotations
@@ -151,21 +151,21 @@ class TestRecordDualTracksStopOrder:
 
 
 # ---------------------------------------------------------------------------
-# Fix #3 — _gemini_transcribe_single: thinking_config med thinking_budget=128
+# Fix #3 — _gemini_transcribe_single: thinking_config med thinking_level=LOW
 # ---------------------------------------------------------------------------
 
-class TestGeminiTranscribeSingleThinkingBudget:
+class TestGeminiTranscribeSingleThinkingLevel:
     """Verificerer at GenerateContentConfig sendes med
-    thinking_config=ThinkingConfig(thinking_budget=128).
+    thinking_config=ThinkingConfig(thinking_level=LOW).
 
     Foer fix: ingen ThinkingConfig → 2.5-pro kunne bruge hele output-
     budgettet paa thinking og returnere tom tekst + MAX_TOKENS.
     """
 
-    def test_thinking_budget_128_in_generate_content_config(
+    def test_thinking_level_low_in_generate_content_config(
         self, fake_gemini_client, tmp_wav
     ):
-        """thinking_config skal vaere sat med thinking_budget=128 i den
+        """thinking_config skal vaere sat med thinking_level=LOW i den
         GenerateContentConfig der sendes til generate_content."""
         import google.genai as _genai_module
 
@@ -181,22 +181,22 @@ class TestGeminiTranscribeSingleThinkingBudget:
         cfg_call = _genai_module.types.GenerateContentConfig.call_args
         assert cfg_call is not None, "GenerateContentConfig blev aldrig kaldt"
 
-        # ThinkingConfig skal vaere instantieret med thinking_budget=128
+        # ThinkingConfig skal vaere instantieret med thinking_level=LOW
         thinking_config_calls = _genai_module.types.ThinkingConfig.call_args
         assert thinking_config_calls is not None, (
             "types.ThinkingConfig blev aldrig instantieret — "
             "thinking_config mangler i GenerateContentConfig-kaldet"
         )
-        assert thinking_config_calls.kwargs.get("thinking_budget") == 128, (
-            f"thinking_budget skal vaere 128, fik: "
-            f"{thinking_config_calls.kwargs.get('thinking_budget')!r}"
+        assert thinking_config_calls.kwargs.get("thinking_level") == "LOW", (
+            f"thinking_level skal vaere LOW, fik: "
+            f"{thinking_config_calls.kwargs.get('thinking_level')!r}"
         )
 
     def test_thinking_config_passed_to_generate_content_config(
         self, fake_gemini_client, tmp_wav
     ):
         """thinking_config-argumentet i GenerateContentConfig-kaldet skal vaere
-        det ThinkingConfig-objekt der er bygget med thinking_budget=128.
+        det ThinkingConfig-objekt der er bygget med thinking_level=LOW.
 
         Denne test verificerer at ThinkingConfig-resultatet faktisk videregives
         (ikke kun at ThinkingConfig instantieres et sted).

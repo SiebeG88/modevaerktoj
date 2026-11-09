@@ -14,8 +14,8 @@ mødereferater på dansk uden at sende lyd til unødvendige tredjeparter.
 - Optager direkte fra mikrofon (avfoundation via ffmpeg)
 - To transkriptionsmotorer:
   - **Hviske (live, lokal)** — `syvai/faster-hviske-v3-conversation` via faster-whisper, kører løbende under optagelsen, ingen cloud-data
-  - **Gemini (efter, cloud)** — Gemini 2.5 Pro via Files API, kører efter optagelsen, bedre til danske egennavne og fagtermer. Auto-chunking ved >15 min med parallel transkription og retry på RECITATION-fejl
-- Genererer fyldigt referat med Gemini (gemini-2.5-pro) bagefter
+  - **Gemini (efter, cloud)** — Gemini 3.8 Flash via Files API, kører efter optagelsen, bedre til danske egennavne og fagtermer. Auto-chunking ved >15 min med parallel transkription og retry på RECITATION-fejl
+- Genererer fyldigt referat med Gemini (gemini-3.8-flash) bagefter
 - Gemmer transkription + referat som markdown i samme mappe som WAV'en (default `~/Møder`); referatet gemmes også som **PDF** (pandoc + weasyprint)
 - Holder Mac vågen under optagelse (caffeinate)
 - **Systemlyd-optagelse (Meet/Teams/telefon):** optager modpartens lyd som
