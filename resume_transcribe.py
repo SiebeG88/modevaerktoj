@@ -68,7 +68,7 @@ def main():
     transcript = meeting_tool.transcribe_with_gemini(
         wav_path,
         attendees=attendees,
-        model="gemini-2.5-pro",
+        model=meeting_tool.GEMINI_MODEL,
     )
 
     transcript_file = output_dir / f"Transkription {name_base}.md"

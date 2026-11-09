@@ -40,7 +40,7 @@ import audio_routing  # noqa: E402
 
 DEFAULT_ATTENDEES = []
 DEFAULT_MODEL = "syvai/faster-hviske-v3-conversation"
-DEFAULT_GEMINI_MODEL = "gemini-2.5-pro"
+DEFAULT_GEMINI_MODEL = meeting_tool.GEMINI_MODEL
 DEFAULT_ENGINE = "hviske"  # "hviske" (live, lokalt) eller "gemini" (efter, cloud)
 DEFAULT_CHUNK_DURATION = 900  # 15 min — fast chunk-længde for Hviske live (auto)
 
@@ -1202,7 +1202,7 @@ class MeetingApp:
         if value == "gemini":
             self._engine_hint.configure(
                 text=(
-                    "Gemini 2.5 Pro kører efter optagelsen (auto-chunking). "
+                    "Gemini 3.8 Flash kører efter optagelsen (auto-chunking). "
                     "Bedst til danske navne og fagtermer."
                 )
             )
@@ -2918,7 +2918,7 @@ class TranscribeFileTab:
         if value == "gemini":
             self._engine_hint.configure(
                 text=(
-                    "Gemini 2.5 Pro (cloud). Bedst til danske navne og fagtermer; "
+                    "Gemini 3.8 Flash (cloud). Bedst til danske navne og fagtermer; "
                     "auto-chunking ved lange filer. Sender lyd til Google."
                 )
             )

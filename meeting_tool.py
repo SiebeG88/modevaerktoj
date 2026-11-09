@@ -81,6 +81,9 @@ FFPROBE = app_paths.resolve_binary("ffprobe")
 # macOS/Linux, hvor flaget ikke findes (getattr giver 0 = ingen effekt).
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# Eneste sted modellen står. 2.5-pro er lukket for nye API-nøgler og udfases.
+GEMINI_MODEL = "gemini-3.8-flash"
+
 # ---------------------------------------------------------------------------
 # Platform-detektion
 # ---------------------------------------------------------------------------
@@ -1220,7 +1223,7 @@ def record_then_transcribe_gemini(
     device_id: int | str,  # avfoundation-index (macOS, int) eller dshow device-navn (Windows, str)
     system_device: int | None = None,
     attendees: list[str] | None = None,
-    model: str = "gemini-2.5-pro",
+    model: str = GEMINI_MODEL,
     stop_event: threading.Event | None = None,
     on_status=None,
     on_chunk_done=None,  # API-kompatibilitet med live; bruges ikke her
@@ -1488,7 +1491,7 @@ def _parse_transcript_segments(text: str) -> list[tuple[float, float, str]]:
 
 
 # ---------------------------------------------------------------------------
-# 3b. Transkription med Gemini 2.5 Pro (cloud, bedre paa danske navne/termer)
+# 3b. Transkription med Gemini 3.8 Flash (cloud, bedre paa danske navne/termer)
 # ---------------------------------------------------------------------------
 
 GEMINI_SYSTEM_INSTRUCTION = """\
@@ -1744,11 +1747,10 @@ def _gemini_transcribe_single(
                     system_instruction=system_instruction,
                     temperature=temperature,
                     max_output_tokens=65000,
-                    # Transkription kræver ingen reasoning. Uden cap kan 2.5-pro
-                    # brænde hele output-budgettet på thinking → tom tekst +
-                    # finish_reason=MAX_TOKENS (set på sys-sporet). Cap lavt så
-                    # hele budgettet er til selve transkriptet. (Min for pro = 128.)
-                    thinking_config=types.ThinkingConfig(thinking_budget=128),
+                    # Transkription kræver ingen reasoning. For meget thinking kan
+                    # brænde hele output-budgettet → tom tekst + finish_reason=
+                    # MAX_TOKENS (set på sys-sporet). LOW er laveste niveau på 3.8-flash.
+                    thinking_config=types.ThinkingConfig(thinking_level="LOW"),
                 ),
             )
             break
@@ -1860,7 +1862,7 @@ GEMINI_MAX_PARALLEL = 3
 def transcribe_with_gemini(
     wav_path: Path,
     attendees: list[str] | None = None,
-    model: str = "gemini-2.5-pro",
+    model: str = GEMINI_MODEL,
     extra_context: str = "",
     on_status=None,
     chunk_seconds: int = GEMINI_CHUNK_SECONDS,
@@ -1870,7 +1872,7 @@ def transcribe_with_gemini(
     meeting_type_name: str = "driftsledelsesmøde",
 ) -> str:
     """
-    Transkribér lydfil med Gemini 2.5 Pro via Files API.
+    Transkribér lydfil med Gemini 3.8 Flash via Files API.
 
     For lyd over `chunk_threshold_seconds` (default 15 min) splittes den
     automatisk i `chunk_seconds`-stykker (default 12 min), der transkriberes
@@ -2142,7 +2144,7 @@ Generer venligst et komplet referat og opgaveliste.
 """
 
 
-GEMINI_MINUTES_MODEL = "gemini-2.5-pro"
+GEMINI_MINUTES_MODEL = GEMINI_MODEL
 
 
 def generate_minutes(
@@ -2254,7 +2256,7 @@ def transcribe_file(
     engine: str = "hviske",
     make_minutes: bool = True,
     model_size: str = DEFAULT_HVISKE_MODEL,
-    gemini_model: str = "gemini-2.5-pro",
+    gemini_model: str = GEMINI_MODEL,
     on_status=None,
     stop_event: threading.Event | None = None,
     meeting_type: dict | None = None,
@@ -2371,7 +2373,7 @@ def main():
         default="hviske",
         help=(
             "Transkriptions-motor: 'hviske' (lokalt, faster-whisper, default) "
-            "eller 'gemini' (cloud, Gemini 2.5 Pro - bedst til navne og fagtermer). "
+            "eller 'gemini' (cloud, Gemini 3.8 Flash - bedst til navne og fagtermer). "
             "Gemini koerer ALTID efter optagelsen (ikke live)."
         ),
     )
@@ -2380,7 +2382,7 @@ def main():
         default=None,
         help=(
             "Model-ID. Default afhaenger af --engine: "
-            "hviske=syvai/faster-hviske-v3-conversation, gemini=gemini-2.5-pro"
+            f"hviske=syvai/faster-hviske-v3-conversation, gemini={GEMINI_MODEL}"
         ),
     )
     trans_group.add_argument(
@@ -2450,7 +2452,7 @@ def main():
     # Default model afhaengig af engine
     if args.model is None:
         args.model = (
-            "gemini-2.5-pro"
+            GEMINI_MODEL
             if args.engine == "gemini"
             else "syvai/faster-hviske-v3-conversation"
         )
