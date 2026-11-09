@@ -14,8 +14,8 @@ import meeting_tool as mt
 PRODUCTION_FILES = ["meeting_tool.py", "meeting_app.py", "resume_transcribe.py"]
 
 
-def test_default_model_is_3_8_flash():
-    assert mt.GEMINI_MODEL == "gemini-3.8-flash"
+def test_default_model_is_3_6_flash():
+    assert mt.GEMINI_MODEL == "gemini-3.6-flash"
     assert mt.GEMINI_MINUTES_MODEL == mt.GEMINI_MODEL
 
 

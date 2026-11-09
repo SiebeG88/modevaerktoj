@@ -82,7 +82,7 @@ FFPROBE = app_paths.resolve_binary("ffprobe")
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # Eneste sted modellen står. 2.5-pro er lukket for nye API-nøgler og udfases.
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 
 # ---------------------------------------------------------------------------
 # Platform-detektion
@@ -1491,7 +1491,7 @@ def _parse_transcript_segments(text: str) -> list[tuple[float, float, str]]:
 
 
 # ---------------------------------------------------------------------------
-# 3b. Transkription med Gemini 3.8 Flash (cloud, bedre paa danske navne/termer)
+# 3b. Transkription med Gemini 3.6 Flash (cloud, bedre paa danske navne/termer)
 # ---------------------------------------------------------------------------
 
 GEMINI_SYSTEM_INSTRUCTION = """\
@@ -1749,7 +1749,7 @@ def _gemini_transcribe_single(
                     max_output_tokens=65000,
                     # Transkription kræver ingen reasoning. For meget thinking kan
                     # brænde hele output-budgettet → tom tekst + finish_reason=
-                    # MAX_TOKENS (set på sys-sporet). LOW er laveste niveau på 3.8-flash.
+                    # MAX_TOKENS (set på sys-sporet). LOW er testet på 3.6-flash.
                     thinking_config=types.ThinkingConfig(thinking_level="LOW"),
                 ),
             )
@@ -1872,7 +1872,7 @@ def transcribe_with_gemini(
     meeting_type_name: str = "driftsledelsesmøde",
 ) -> str:
     """
-    Transkribér lydfil med Gemini 3.8 Flash via Files API.
+    Transkribér lydfil med Gemini 3.6 Flash via Files API.
 
     For lyd over `chunk_threshold_seconds` (default 15 min) splittes den
     automatisk i `chunk_seconds`-stykker (default 12 min), der transkriberes
@@ -2373,7 +2373,7 @@ def main():
         default="hviske",
         help=(
             "Transkriptions-motor: 'hviske' (lokalt, faster-whisper, default) "
-            "eller 'gemini' (cloud, Gemini 3.8 Flash - bedst til navne og fagtermer). "
+            "eller 'gemini' (cloud, Gemini 3.6 Flash - bedst til navne og fagtermer). "
             "Gemini koerer ALTID efter optagelsen (ikke live)."
         ),
     )
