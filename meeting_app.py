@@ -1202,7 +1202,7 @@ class MeetingApp:
         if value == "gemini":
             self._engine_hint.configure(
                 text=(
-                    "Gemini 3.8 Flash kører efter optagelsen (auto-chunking). "
+                    "Gemini 3.6 Flash kører efter optagelsen (auto-chunking). "
                     "Bedst til danske navne og fagtermer."
                 )
             )
@@ -2918,7 +2918,7 @@ class TranscribeFileTab:
         if value == "gemini":
             self._engine_hint.configure(
                 text=(
-                    "Gemini 3.8 Flash (cloud). Bedst til danske navne og fagtermer; "
+                    "Gemini 3.6 Flash (cloud). Bedst til danske navne og fagtermer; "
                     "auto-chunking ved lange filer. Sender lyd til Google."
                 )
             )
